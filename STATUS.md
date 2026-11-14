@@ -25,7 +25,6 @@ Hackathon de Cursor, cierre el domingo 15 de noviembre a la 1:00 pm (CDMX). Reto
 
 - **Pago real por notificación push.** El pago real se hizo por QR. Las solicitudes push se crean en pey (`PENDING`), pero falta confirmar que una aceptada en el banco llegue por webhook.
 - **Rotar el secreto del webhook** antes de la demo pública: el actual se compartió en un chat.
-- **La vista QR del participante, probada en un navegador.** El flujo QR se probó por la API y el simulador, no en pantalla.
 - **Devoluciones.** pey no documenta un endpoint. Un doble pago queda marcado "requiere devolución" y se devuelve a mano.
 
 ## TODO(pey-docs): lo que pey no documenta
