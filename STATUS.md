@@ -18,11 +18,13 @@ Hackathon de Cursor, cierre el domingo 15 de noviembre a la 1:00 pm (CDMX). Reto
 | Eventos de pago para el admin, incluidos duplicados | Probado en navegador |
 | `PEY_MOCK=1` etiquetado "SIMULADO"; `/api/dev/simulate-payment` da 404 sin él | En producción da 404 |
 | Desplegado en Vercel, conectado a GitHub | <https://dema-beryl.vercel.app> |
+| **Pago real con pey, $0.01 por QR CoDi** | Webhook firmado `codi.qr.payment_received` recibido en producción, procesado como "pagado · cuenta saldada"; pey consulta el cobro como `PAID` (cuenta `iw4uhcts`, 14 nov) |
 | Cero web3 | `grep -ri "hedera\|x402\|privy\|worldcoin\|hashscan\|tusd" src` no devuelve nada |
 
 ## Falta
 
-- **El pago real de $1 con pey.** El código y el despliegue están listos; falta registrar el webhook en pey y pagar desde un celular.
+- **Pago real por notificación push.** El pago real se hizo por QR. Las solicitudes push se crean en pey (`PENDING`), pero falta confirmar que una aceptada en el banco llegue por webhook.
+- **Rotar el secreto del webhook** antes de la demo pública: el actual se compartió en un chat.
 - **La vista QR del participante, probada en un navegador.** El flujo QR se probó por la API y el simulador, no en pantalla.
 - **Devoluciones.** pey no documenta un endpoint. Un doble pago queda marcado "requiere devolución" y se devuelve a mano.
 
