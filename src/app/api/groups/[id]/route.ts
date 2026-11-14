@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import {
   DB_OFFLINE,
-  getGroup,
+  getTable,
+  paymentEvents,
+  requestPayment,
   isDbUnreachable,
   GroupError,
   joinGroup,
@@ -29,7 +31,7 @@ function fail(e: unknown) {
 export async function GET(_request: Request, { params }: Ctx) {
   const { id } = await params;
   try {
-    return NextResponse.json(await getGroup(id), { headers: { "cache-control": "no-store" } });
+    return NextResponse.json(await getTable(id), { headers: { "cache-control": "no-store" } });
   } catch (e) {
     return fail(e);
   }
@@ -68,6 +70,12 @@ export async function POST(request: Request, { params }: Ctx) {
       case "start":
         await startCollecting(id, memberId, secret);
         return NextResponse.json({ ok: true });
+      case "pay":
+        return NextResponse.json(
+          await requestPayment(id, memberId, secret, { phone: body.phone, method: body.method, resend: body.resend }),
+        );
+      case "events":
+        return NextResponse.json(await paymentEvents(id, memberId, secret));
       case "reopen":
         await reopenGroup(id, memberId, secret);
         return NextResponse.json({ ok: true });

@@ -1,5 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { CollectError, requestPaymentWith } from "./collect";
 import { CURRENCY, type Currency } from "./money";
+import type { ChargeRow } from "./payments";
+import { createCharge, isMock, PeyError } from "./pey";
 import { checkShares, equalShares, transfersToPayer, type SplitMode } from "./split";
 import { serverClient } from "./supabase";
 
@@ -162,6 +165,23 @@ export async function getGroup(groupId: string): Promise<{ group: GroupRow; memb
   if (mErr) throw new GroupError(mErr.message, 502);
 
   return { group: group as GroupRow, members: (members ?? []) as MemberRow[] };
+}
+
+/**
+ * The bill as anyone with the link sees it: the group, who is at the table,
+ * and every charge (amount, state, QR) — never secrets or phone numbers.
+ */
+export async function getTable(groupId: string) {
+  const { group, members } = await getGroup(groupId);
+  const { data: charges, error } = await serverClient()
+    .from("charges")
+    .select(
+      "id, member_id, pey_charge_id, amount_cents, method, status, qr_string, codi_id, pey_transaction_id, simulated, created_at, paid_at, expires_at",
+    )
+    .eq("group_id", groupId)
+    .order("created_at", { ascending: false });
+  if (error) throw new GroupError(error.message, 502);
+  return { group, members, charges: charges ?? [], simulated: isMock() };
 }
 
 /** Prove the caller is the member they claim to be. */
@@ -413,11 +433,101 @@ export async function reopenGroup(groupId: string, memberId: string, secret: str
   if (group.status === "open") return;
 
   const db = serverClient();
-  const { error } = await db.from("groups").update({ status: "open" }).eq("id", groupId);
+  const { data: paid, error: pErr } = await db
+    .from("charges")
+    .select("id")
+    .eq("group_id", groupId)
+    .eq("status", "paid")
+    .limit(1);
+  if (pErr) throw new GroupError(pErr.message, 502);
+  if ((paid ?? []).length > 0) {
+    throw new GroupError("Alguien ya pagó su parte: el reparto ya no se puede cambiar", 409);
+  }
+
+  // Requests already sent stop counting. If one is paid anyway, the webhook
+  // records it and flags it for review instead of losing it.
+  const { error: cErr } = await db
+    .from("charges")
+    .update({ status: "expired" })
+    .eq("group_id", groupId)
+    .eq("status", "pending");
+  if (cErr) throw new GroupError(cErr.message, 502);
+
+  const { error } = await db.from("groups").update({ status: "open" }).eq("id", groupId).eq("status", "collecting");
   if (error) throw new GroupError(error.message, 502);
 
   const { error: e } = await db.from("members").update({ paid: false, paid_at: null }).eq("group_id", groupId);
   if (e) throw new GroupError(e.message, 502);
+}
+
+/**
+ * Ask pey to charge this person their share — by a push request to their
+ * phone, or as a QR. Never marks anyone paid: only the webhook does that.
+ */
+export async function requestPayment(
+  groupId: string,
+  memberId: string,
+  secret: string,
+  opts: { phone?: unknown; method?: unknown; resend?: unknown } = {},
+) {
+  const db = serverClient();
+  try {
+    const { charge, reused } = await requestPaymentWith(
+      {
+        async load() {
+          const me = await authenticate(groupId, memberId, secret);
+          const { group } = await getGroup(groupId);
+          return { group, member: me };
+        },
+        async chargesOf(id) {
+          const { data, error } = await db
+            .from("charges")
+            .select("*")
+            .eq("member_id", id)
+            .order("created_at", { ascending: false });
+          if (error) throw new GroupError(error.message, 502);
+          return (data ?? []) as ChargeRow[];
+        },
+        async expire(chargeId) {
+          const { error } = await db.from("charges").update({ status: "expired" }).eq("id", chargeId).eq("status", "pending");
+          if (error) throw new GroupError(error.message, 502);
+        },
+        async savePhone(id, phone) {
+          const { error } = await db.from("member_secrets").update({ phone }).eq("member_id", id);
+          if (error) throw new GroupError(error.message, 502);
+        },
+        createCharge,
+        async insertCharge(row) {
+          const { data, error } = await db.from("charges").insert(row).select("*").single();
+          if (error) throw new GroupError(error.message, 502);
+          return data as ChargeRow;
+        },
+        now: () => new Date(),
+      },
+      opts,
+    );
+    return { chargeId: charge.id, method: charge.method, reused, expiresAt: charge.expires_at, simulated: charge.simulated };
+  } catch (e) {
+    if (e instanceof CollectError || e instanceof PeyError) throw new GroupError(e.message, e.status);
+    throw e;
+  }
+}
+
+/**
+ * Every payment notice that arrived for this bill, for the admin — the
+ * evidence that each payment was confirmed on the server. The raw payload
+ * stays on the server: it carries the payer's bank details.
+ */
+export async function paymentEvents(groupId: string, memberId: string, secret: string) {
+  await authenticateAdmin(groupId, memberId, secret);
+  const { data, error } = await serverClient()
+    .from("webhook_events")
+    .select("id, received_at, pey_event_id, type, processed, result, payload->>transactionId, payload->>amount")
+    .eq("group_id", groupId)
+    .order("received_at", { ascending: false })
+    .limit(100);
+  if (error) throw new GroupError(error.message, 502);
+  return { events: data ?? [] };
 }
 
 /**
