@@ -1,0 +1,23 @@
+node_modules/
+.next/
+out/
+build/
+.DS_Store
+
+# Secrets — never commit. Hedera testnet keys live here and nowhere else.
+.env
+.env.local
+.env*.local
+
+*.tsbuildinfo
+next-env.d.ts
+.vercel
+
+.vercel
+.env*
+
+# Throwaway testnet accounts for the demo group. Keys — never commit.
+demo-accounts.json
+
+# The example has names only, no values — it is meant to be committed.
+!.env.local.example

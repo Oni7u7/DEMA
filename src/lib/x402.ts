@@ -1,0 +1,246 @@
+/**
+ * x402 payment gate — Hedera `exact` scheme, settled through Blocky402.
+ *
+ * Shapes here are not guessed. They were taken from the authoritative
+ * scheme spec (x402-foundation/x402, specs/schemes/exact/scheme_exact_hedera.md)
+ * and checked against the live facilitator at api.testnet.blocky402.com,
+ * whose validator rejects anything that does not match.
+ *
+ * The flow:
+ *   1. caller asks for work with no payment      -> we answer 402, with the
+ *      requirements in the PAYMENT-REQUIRED header
+ *   2. caller builds a Hedera transfer, signs it PARTIALLY, base64s it,
+ *      and retries with PAYMENT-SIGNATURE
+ *   3. we POST that to the facilitator's /verify, then /settle
+ *   4. the facilitator co-signs as FEE PAYER and submits
+ *
+ * Step 4 is the part worth noticing: the facilitator sponsors the network fee,
+ * so a caller can pay for the work without holding HBAR for gas.
+ */
+
+const FACILITATOR =
+  process.env.X402_FACILITATOR_URL ?? "https://api.testnet.blocky402.com";
+
+export const X402_VERSION = 2;
+export const HEDERA_NETWORK = process.env.HEDERA_NETWORK === "mainnet" ? "hedera:mainnet" : "hedera:testnet";
+/** 0.0.0 is HBAR itself; an HTS token would use its own id here. */
+export const HBAR_ASSET = "0.0.0";
+
+export interface PaymentRequirements {
+  scheme: "exact";
+  network: string;
+  /** Tinybars, as a string. The facilitator rejects numbers. */
+  amount: string;
+  resource: string;
+  description: string;
+  mimeType: string;
+  payTo: string;
+  maxTimeoutSeconds: number;
+  asset: string;
+  extra: Record<string, unknown>;
+}
+
+export interface PaymentPayload {
+  x402Version: number;
+  scheme: string;
+  network: string;
+  /** { transaction: base64 partially-signed Hedera transaction } */
+  payload: Record<string, unknown>;
+}
+
+export interface VerifyResult {
+  isValid: boolean;
+  invalidReason?: string | null;
+  payer?: string;
+}
+
+export interface SettleResult {
+  success: boolean;
+  errorReason?: string | null;
+  transaction?: string;
+  network?: string;
+  payer?: string;
+}
+
+export function isEnabled(): boolean {
+  return process.env.X402_ENABLED === "true";
+}
+
+/** Who gets paid. Without this the gate cannot be armed. */
+export function payTo(): string | null {
+  return process.env.HEDERA_OPERATOR_ID || null;
+}
+
+/**
+ * The account that sponsors the network fee. Read from the facilitator's
+ * /supported at boot; falls back to the value it advertises today.
+ */
+let cachedFeePayer: string | null = null;
+
+export async function feePayer(): Promise<string> {
+  if (cachedFeePayer) return cachedFeePayer;
+
+  try {
+    const res = await fetch(`${FACILITATOR}/supported`, {
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) {
+      const body = (await res.json()) as {
+        kinds?: Array<{ network?: string; extra?: { feePayer?: string } }>;
+      };
+      const kind = body.kinds?.find((k) => k.network === HEDERA_NETWORK);
+      if (kind?.extra?.feePayer) {
+        cachedFeePayer = kind.extra.feePayer;
+        return cachedFeePayer;
+      }
+    }
+  } catch {
+    // fall through to the configured default
+  }
+
+  cachedFeePayer = process.env.X402_FEE_PAYER ?? "0.0.7162784";
+  return cachedFeePayer;
+}
+
+export async function buildRequirements(args: {
+  tinybars: number;
+  resource: string;
+  description: string;
+}): Promise<PaymentRequirements> {
+  const recipient = payTo();
+  if (!recipient) throw new Error("HEDERA_OPERATOR_ID is not set");
+
+  return {
+    scheme: "exact",
+    network: HEDERA_NETWORK,
+    amount: String(args.tinybars),
+    resource: args.resource,
+    description: args.description,
+    mimeType: "application/json",
+    payTo: recipient,
+    maxTimeoutSeconds: 180,
+    asset: HBAR_ASSET,
+    extra: { feePayer: await feePayer() },
+  };
+}
+
+/**
+ * The body of a 402 answer. `accepts` is what the caller pays against.
+ *
+ * Protocol v2 also requires a top-level `resource` describing what was asked
+ * for; without it the official client refuses the challenge with "Invalid
+ * payment required response" and never gets as far as paying. The result is
+ * validated against the SDK's own schema so this cannot drift again unnoticed.
+ */
+export async function challenge(
+  requirements: PaymentRequirements,
+  error: string,
+  resource: { url: string; method: string },
+) {
+  const body = {
+    x402Version: X402_VERSION,
+    error,
+    resource,
+    accepts: [requirements],
+  };
+
+  try {
+    const { PaymentRequiredSchema } = await import("@x402/core/schemas");
+    const parsed = PaymentRequiredSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new Error(
+        `402 body does not match the x402 v2 schema: ${JSON.stringify(parsed.error.issues)}`,
+      );
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("402 body")) throw e;
+    // Schema package unavailable — send the body as built.
+  }
+
+  return body;
+}
+
+/**
+ * Protocol v2 carries the challenge in the PAYMENT-REQUIRED header — only v1
+ * clients read it from the body. Send both: the header is what the official
+ * client parses, the body is what a human sees in curl.
+ */
+export async function challengeHeader(body: unknown): Promise<Record<string, string>> {
+  try {
+    const { encodePaymentRequiredHeader } = await import("@x402/core/http");
+    return { "PAYMENT-REQUIRED": encodePaymentRequiredHeader(body as never) };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The v2 protocol carries the payment in PAYMENT-SIGNATURE. Decoding is the
+ * SDK's job — the encoding has changed between protocol versions and guessing
+ * it costs a day. X-PAYMENT is accepted too, for older clients.
+ */
+export async function readPayment(request: Request): Promise<PaymentPayload | null> {
+  const header =
+    request.headers.get("payment-signature") ?? request.headers.get("x-payment");
+  if (!header) return null;
+
+  try {
+    const { decodePaymentSignatureHeader } = await import("@x402/core/http");
+    return decodePaymentSignatureHeader(header) as unknown as PaymentPayload;
+  } catch {
+    // Fall back to a plain base64 JSON envelope.
+    try {
+      const parsed = JSON.parse(Buffer.from(header, "base64").toString("utf8")) as PaymentPayload;
+      return parsed?.payload ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${FACILITATOR}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  const text = await res.text();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(`Facilitator ${path} returned non-JSON (${res.status}): ${text.slice(0, 200)}`);
+  }
+
+  if (!res.ok) {
+    const message =
+      (parsed as { message?: string })?.message ?? `Facilitator ${path} failed (${res.status})`;
+    throw new Error(message);
+  }
+
+  return parsed as T;
+}
+
+export function verify(
+  paymentPayload: PaymentPayload,
+  paymentRequirements: PaymentRequirements,
+): Promise<VerifyResult> {
+  return post<VerifyResult>("/verify", {
+    x402Version: X402_VERSION,
+    paymentPayload,
+    paymentRequirements,
+  });
+}
+
+export function settlePayment(
+  paymentPayload: PaymentPayload,
+  paymentRequirements: PaymentRequirements,
+): Promise<SettleResult> {
+  return post<SettleResult>("/settle", {
+    x402Version: X402_VERSION,
+    paymentPayload,
+    paymentRequirements,
+  });
+}

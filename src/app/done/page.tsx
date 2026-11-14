@@ -1,0 +1,235 @@
+"use client";
+
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { formatUsd } from "@/lib/money";
+import { formatCents, netExpenses } from "@/lib/netting";
+import { useLocale } from "@/components/Locale";
+import { useGroup } from "@/components/GroupProvider";
+
+/**
+ * Settled.
+ *
+ * The explorer link points at the scheduled transaction that actually
+ * executed, and only renders when there is one. A dead link to a real
+ * explorer is worse than no link, so with no settlement this screen says so
+ * rather than inventing a hash.
+ *
+ * The transfers are worked out here with the same deterministic solver: the
+ * plan was already bought over x402 on the plan screen, and buying it a
+ * third time just to draw this list would only spend the agent's balance.
+ */
+function Done() {
+  const { name: groupName, people, expenses } = useGroup();
+  const plan = useMemo(() => netExpenses(expenses), [expenses]);
+  const { t } = useLocale();
+  const scheduleId = useSearchParams().get("schedule");
+  const [usd, setUsd] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (!scheduleId) return;
+    try {
+      setUsd(JSON.parse(sessionStorage.getItem(`squash:trip-usd:${scheduleId}`) ?? "{}"));
+    } catch {
+      setUsd({});
+    }
+  }, [scheduleId]);
+  const [scheduleStatus, setScheduleStatus] = useState<{
+    executed: boolean | null;
+    loading: boolean;
+    error: string | null;
+  }>({ executed: null, loading: false, error: null });
+
+  useEffect(() => {
+    if (!scheduleId) {
+      setScheduleStatus({ executed: null, loading: false, error: null });
+      return;
+    }
+
+    let ignored = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let attempts = 0;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/settle?scheduleId=${encodeURIComponent(scheduleId)}`);
+        const data = (await res.json()) as { executed?: boolean; succeeded?: boolean; result?: string; error?: string };
+
+        if (!res.ok || data.error) {
+          throw new Error(data.error ?? "Failed to fetch schedule status");
+        }
+
+        if (ignored) return;
+
+        // Executed means the last signature arrived; succeeded means the
+        // money actually moved. Only the second is "done".
+        if (data.executed && data.succeeded === false) {
+          throw new Error(`The network rejected the settlement (${data.result}). Nobody was charged.`);
+        }
+        const executed = Boolean(data.executed);
+
+        if (executed) {
+          setScheduleStatus({ executed: true, loading: false, error: null });
+          return;
+        }
+
+        attempts += 1;
+
+        if (attempts >= 20) {
+          setScheduleStatus({ executed: false, loading: false, error: null });
+          return;
+        }
+
+        timeoutId = setTimeout(() => {
+          void poll();
+        }, 2500);
+      } catch (e) {
+        if (ignored) return;
+        setScheduleStatus({ executed: null, loading: false, error: (e as Error).message });
+      }
+    };
+
+    setScheduleStatus({ executed: null, loading: true, error: null });
+    void poll();
+
+    return () => {
+      ignored = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [scheduleId]);
+
+  // Opened without a settlement behind it: say so, instead of a "pending"
+  // screen with a zero balance that nothing is actually waiting on.
+  if (!scheduleId) {
+    return (
+      <main className="phone done">
+        <div style={{ flexGrow: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, padding: "40px 26px 0", textAlign: "center" }}>
+          <span style={{ fontFamily: "var(--f-display)", fontSize: 30, fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.12 }}>
+            {t("No settlement to show yet", "Todavía no hay liquidación que mostrar")}
+          </span>
+          <span style={{ fontSize: 14, color: "#d3e8dc", lineHeight: 1.55, maxWidth: 300, textWrap: "pretty" }}>
+            {t(
+              "This screen shows a settlement once everyone has confirmed it. Go through the sample trip's plan to run one on Hedera testnet.",
+              "Esta pantalla muestra una liquidación cuando todos la confirmaron. Recorre el plan del viaje de ejemplo para correr una en Hedera testnet.",
+            )}
+          </span>
+        </div>
+        <div style={{ padding: "0 26px 22px", display: "flex", flexDirection: "column", gap: 6, alignItems: "center" }}>
+          <Link href="/grupo" className="btn" style={{ background: "#f1f5f1", color: "var(--settled)", fontWeight: 600 }}>
+            {t("Open the sample trip", "Abrir el viaje de ejemplo")}
+          </Link>
+        </div>
+      </main>
+    );
+  }
+
+  const personNameFor = (id: string) => people.find((person) => person.id === id)?.name ?? id;
+
+  const explorer =
+    process.env.NEXT_PUBLIC_HEDERA_NETWORK === "mainnet"
+      ? "https://hashscan.io/mainnet"
+      : "https://hashscan.io/testnet";
+  const isVerified = scheduleStatus.executed === true;
+  const title = scheduleStatus.loading
+    ? t("Verifying settlement…", "Verificando liquidación…")
+    : isVerified
+      ? t("Everyone is settled.", "Todos en cero.")
+      : t("Settlement is pending…", "Liquidación pendiente…");
+  const statusText = scheduleStatus.loading
+    ? t("Checking the schedule on Hedera now.", "Comprobando el schedule en Hedera ahora mismo.")
+    : scheduleStatus.error
+      ? scheduleStatus.error
+      : isVerified
+        ? t("The final scheduled transfer has executed successfully.", "La transferencia programada final ya se ejecutó correctamente.")
+        : scheduleStatus.executed === false
+          ? t("The schedule exists, but the final execution has not happened yet.", "El schedule existe, pero la ejecución final aún no ha ocurrido.")
+          : t("Waiting for the schedule result.", "Esperando el resultado del schedule.");
+
+  return (
+    <main className="phone done">
+      <div
+        style={{
+          flexGrow: 1,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 20,
+          padding: "40px 26px 0",
+          textAlign: "center",
+        }}
+      >
+        <svg width="76" height="76" viewBox="0 0 76 76" fill="none" aria-hidden="true">
+          <circle cx="38" cy="38" r="36" fill="none" stroke="#79cfa8" strokeWidth="1.4" />
+          <circle cx="38" cy="38" r="28" fill="#f1f5f1" />
+          <path d="M27 38.5l7.5 7.5L50 30" fill="none" stroke="var(--settled)" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <span style={{ fontFamily: "var(--f-display)", fontSize: 36, fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.08 }}>
+            {title}
+          </span>
+          <span style={{ fontSize: 14, color: "#d3e8dc" }}>{groupName}</span>
+        </div>
+
+        {isVerified && (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "2px 0 4px" }}>
+            <span className="label" style={{ color: "#d3e8dc" }}>{t("YOUR BALANCE", "TU SALDO")}</span>
+            <span className="money" style={{ fontSize: 46, fontWeight: 500, letterSpacing: "-0.03em" }}>
+              $0.00
+            </span>
+          </div>
+        )}
+
+        <div className="done-list">
+          {plan.transfers.map((transfer) => (
+            <div key={`${transfer.from}-${transfer.to}`} className="done-row">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#79cfa8" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 12.5l5 5L20 6.5" />
+              </svg>
+              <span className="grow" style={{ fontSize: 14, textAlign: "left" }}>
+                {personNameFor(transfer.from)} <span style={{ color: "#d3e8dc" }}>{t("to", "a")}</span> {personNameFor(transfer.to)}
+              </span>
+              <span className="money" style={{ fontSize: 14.5, textAlign: "right" }}>
+                {usd[`${transfer.from}-${transfer.to}`] !== undefined ? formatUsd(usd[`${transfer.from}-${transfer.to}`]) : formatCents(transfer.cents)}
+                <small style={{ display: "block", fontSize: 12, color: "#d3e8dc" }}>{formatCents(transfer.cents)} MXN</small>
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <span style={{ fontSize: 13.5, color: "#d3e8dc", lineHeight: 1.5, maxWidth: 290, textWrap: "pretty" }}>
+          {statusText}
+        </span>
+      </div>
+
+      <div style={{ padding: "0 26px 22px", display: "flex", flexDirection: "column", gap: 6, alignItems: "center" }}>
+        <Link href="/grupo" className="btn" style={{ background: "#f1f5f1", color: "var(--settled)", fontWeight: 600 }}>
+          {t("Back to group", "Volver al grupo")}
+        </Link>
+
+        {isVerified && (
+          <a
+            className="receipt-link"
+            href={`${explorer}/schedule/${encodeURIComponent(scheduleId)}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {t("View receipt", "Ver comprobante")}
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5" />
+            </svg>
+          </a>
+        )}
+      </div>
+    </main>
+  );
+}
+
+export default function DoneScreen() {
+  return (
+    <Suspense fallback={<main className="phone done" />}>
+      <Done />
+    </Suspense>
+  );
+}
