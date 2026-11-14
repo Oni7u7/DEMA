@@ -1,14 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { usdRate } from "./fx";
-import { isCurrency, toUsdCents, type Currency } from "./money";
-import type { Transfer } from "./netting";
-import { fetchPaidPlan } from "./payingClient";
-import { ensureWalletAccount, isEvmAddress } from "./payout";
-import { pool, poolSize } from "./pool";
-import { scheduleSettlement, scheduleStatus, settlementToken, signSchedule } from "./scheduled";
+import { CURRENCY, type Currency } from "./money";
 import { checkShares, equalShares, transfersToPayer, type SplitMode } from "./split";
 import { serverClient } from "./supabase";
-import { seatAction, verifyHuman, worldConfigured } from "./world";
 
 /**
  * A group splitting one bill — server side only.
@@ -16,16 +9,16 @@ import { seatAction, verifyHuman, worldConfigured } from "./world";
  * The rules this file enforces, because nothing else can:
  *
  *  - Only the admin changes how the bill is split.
- *  - Nobody confirms on someone else's behalf. Every write that acts as a
- *    person must present that person's secret, which only their phone holds.
- *  - The split is frozen before anyone confirms. Once the admin asks for
- *    confirmations, the settlement transaction already exists on chain with
- *    those exact amounts; changing a share after that would mean people agreed
- *    to one number and paid another. Reopening throws the pending transaction
- *    away — it simply never executes — and clears every confirmation.
- *  - A confirmation IS a signature. It is not recorded until the person's
- *    signature has actually landed on the scheduled transaction.
+ *  - Nobody acts on someone else's behalf. Every write that acts as a person
+ *    must present that person's secret, which only their phone holds.
+ *  - The split is frozen before anyone pays. Once the admin turns collection
+ *    on, each person is charged exactly their share; changing a share after
+ *    that would mean people agreed to one number and paid another.
+ *  - A person is "paid" only when pey says so to the server. The browser never
+ *    marks anyone paid.
  */
+
+export type GroupStatus = "open" | "collecting" | "settled";
 
 export interface GroupRow {
   id: string;
@@ -33,24 +26,8 @@ export interface GroupRow {
   total_cents: number;
   payer_id: string;
   split_mode: SplitMode;
-  status: "open" | "locked" | "settled";
-  schedule_id: string | null;
-  /** The Hedera transaction that paid the engine for this plan, over x402. */
-  plan_receipt: string | null;
-  /** The currency the bill was paid in. Shares are in its cents. */
+  status: GroupStatus;
   currency: Currency;
-  /** Frozen when confirmations start: US dollars per unit of `currency`. */
-  fx_usd_per_unit: number | null;
-  fx_as_of: string | null;
-  fx_source: string | null;
-  /** The HTS token the settlement moves (tUSD on testnet). */
-  settle_token: string | null;
-  /** The payer's own wallet (Privy), if they chose to be paid there. */
-  payout_evm: string | null;
-  /** The Hedera account behind that wallet. */
-  payout_account: string | null;
-  /** World ID: every seat must be a verified, unique person. */
-  require_human: boolean;
   created_at: string;
 }
 
@@ -60,14 +37,18 @@ export interface MemberRow {
   name: string;
   is_admin: boolean;
   share_cents: number | null;
-  /** The share in US cents, fixed when confirmations start. What they pay. */
-  settle_usd_cents: number | null;
-  confirmed: boolean;
-  account_index: number;
-  /** Passed World ID Selfie Check for this bill. The nullifier itself is server-only. */
-  human_verified: boolean;
+  /** Join order. Unique per group, so two people racing for a seat cannot collide. */
+  seat: number;
+  /** 10 digits, for the CoDi push request. */
+  phone: string | null;
+  /** Set only by the server, when pey confirms the payment. */
+  paid: boolean;
+  paid_at: string | null;
   joined_at: string;
 }
+
+/** The most people one bill can hold. */
+export const MAX_SEATS = 20;
 
 export class GroupError extends Error {
   constructor(
@@ -138,8 +119,8 @@ function safeEqual(a: string, b: string): boolean {
 
 function cleanName(input: unknown, max: number): string {
   const name = String(input ?? "").trim().replace(/\s+/g, " ");
-  if (name.length === 0) throw new GroupError("A name is required");
-  if (name.length > max) throw new GroupError(`Names are at most ${max} characters`);
+  if (name.length === 0) throw new GroupError("Falta el nombre");
+  if (name.length > max) throw new GroupError(`El nombre puede tener máximo ${max} caracteres`);
   return name;
 }
 
@@ -152,22 +133,17 @@ function cleanName(input: unknown, max: number): string {
  * a commit), and if it still fails, remove the member so nobody is left
  * holding a session that can never work.
  */
-async function storeSecret(
-  memberId: string,
-  secret: string,
-  rollback: () => Promise<void>,
-  humanNullifier: string | null = null,
-) {
+async function storeSecret(memberId: string, secret: string, rollback: () => Promise<void>) {
   const db = serverClient();
   for (let attempt = 0; attempt < 3; attempt++) {
     const { error } = await db
       .from("member_secrets")
-      .insert({ member_id: memberId, secret_hash: hashSecret(secret), human_nullifier: humanNullifier });
+      .insert({ member_id: memberId, secret_hash: hashSecret(secret) });
     if (!error || error.code === "23505") return;
     await new Promise((r) => setTimeout(r, 350 * (attempt + 1)));
   }
   await rollback();
-  throw new GroupError("The table is busy — please try again in a moment", 503);
+  throw new GroupError("La mesa está ocupada — intenta de nuevo en un momento", 503);
 }
 
 // ── reads ────────────────────────────────────────────────────────────────
@@ -176,21 +152,21 @@ export async function getGroup(groupId: string): Promise<{ group: GroupRow; memb
   const db = serverClient();
   const { data: group, error } = await db.from("groups").select("*").eq("id", groupId).maybeSingle();
   if (error) throw new GroupError(error.message, 502);
-  if (!group) throw new GroupError("That group does not exist", 404);
+  if (!group) throw new GroupError("Esa cuenta no existe", 404);
 
   const { data: members, error: mErr } = await db
     .from("members")
     .select("*")
     .eq("group_id", groupId)
-    .order("account_index");
+    .order("seat");
   if (mErr) throw new GroupError(mErr.message, 502);
 
   return { group: group as GroupRow, members: (members ?? []) as MemberRow[] };
 }
 
 /** Prove the caller is the member they claim to be. */
-async function authenticate(groupId: string, memberId: string, secret: string): Promise<MemberRow> {
-  if (!memberId || !secret) throw new GroupError("Sign in to this group first", 401);
+export async function authenticate(groupId: string, memberId: string, secret: string): Promise<MemberRow> {
+  if (!memberId || !secret) throw new GroupError("Primero entra a esta cuenta", 401);
 
   const db = serverClient();
   const { data: row } = await db
@@ -200,26 +176,26 @@ async function authenticate(groupId: string, memberId: string, secret: string): 
     .maybeSingle();
 
   if (!row || !safeEqual(row.secret_hash as string, hashSecret(secret))) {
-    throw new GroupError("That session is not valid for this group", 401);
+    throw new GroupError("Esta sesión no es válida para esta cuenta", 401);
   }
 
   const { data: member } = await db.from("members").select("*").eq("id", memberId).maybeSingle();
   if (!member || (member as MemberRow).group_id !== groupId) {
-    throw new GroupError("You are not in this group", 403);
+    throw new GroupError("No estás en esta cuenta", 403);
   }
   return member as MemberRow;
 }
 
-async function authenticateAdmin(groupId: string, memberId: string, secret: string) {
+export async function authenticateAdmin(groupId: string, memberId: string, secret: string) {
   const member = await authenticate(groupId, memberId, secret);
-  if (!member.is_admin) throw new GroupError("Only the group admin can do that", 403);
+  if (!member.is_admin) throw new GroupError("Solo quien administra la cuenta puede hacer eso", 403);
   return member;
 }
 
 function assertOpen(group: GroupRow) {
-  if (group.status === "settled") throw new GroupError("This bill is already settled", 409);
-  if (group.status === "locked") {
-    throw new GroupError("Confirmations are in progress — reopen the split to change it", 409);
+  if (group.status === "settled") throw new GroupError("Esta cuenta ya está saldada", 409);
+  if (group.status === "collecting") {
+    throw new GroupError("Los cobros ya están activos — no se puede cambiar el reparto", 409);
   }
 }
 
@@ -230,29 +206,17 @@ async function applyEqualSplit(group: GroupRow, members: MemberRow[]) {
   const db = serverClient();
   const shares = equalShares(group.total_cents, members.map((m) => m.id));
   for (const m of members) {
-    const { error } = await db
-      .from("members")
-      .update({ share_cents: shares.get(m.id) ?? 0, confirmed: false })
-      .eq("id", m.id);
+    const { error } = await db.from("members").update({ share_cents: shares.get(m.id) ?? 0 }).eq("id", m.id);
     if (error) throw new GroupError(error.message, 502);
   }
 }
 
-export async function createGroup(input: {
-  adminName?: unknown;
-  groupName?: unknown;
-  totalCents?: unknown;
-  currency?: unknown;
-}) {
-  if (poolSize() === 0) throw new GroupError("Settlement accounts are not configured", 503);
-
+export async function createGroup(input: { adminName?: unknown; groupName?: unknown; totalCents?: unknown }) {
   const adminName = cleanName(input.adminName, 40);
   const groupName = cleanName(input.groupName, 60);
   const total = input.totalCents;
-  const currency = input.currency ?? "MXN";
-  if (!isCurrency(currency)) throw new GroupError("The currency must be MXN or USD");
   if (!Number.isInteger(total) || (total as number) < 1 || (total as number) > 10_000_000) {
-    throw new GroupError(`The total must be between $0.01 and $100,000.00 ${currency}`);
+    throw new GroupError("El total debe estar entre $0.01 y $100,000.00 MXN");
   }
 
   const db = serverClient();
@@ -264,7 +228,7 @@ export async function createGroup(input: {
     id: groupId,
     name: groupName,
     total_cents: total,
-    currency,
+    currency: CURRENCY,
     payer_id: memberId,
     split_mode: "equal",
     status: "open",
@@ -277,7 +241,7 @@ export async function createGroup(input: {
     name: adminName,
     is_admin: true,
     share_cents: total, // alone at the table, for now
-    account_index: 0,
+    seat: 0,
   });
   if (mErr) throw new GroupError(mErr.message, 502);
 
@@ -289,49 +253,23 @@ export async function createGroup(input: {
   return { groupId, memberId, secret };
 }
 
-/** Who already holds this person's seat, if anyone. */
-async function seatOfHuman(nullifier: string): Promise<string | null> {
-  const { data } = await serverClient()
-    .from("member_secrets")
-    .select("member_id")
-    .eq("human_nullifier", nullifier)
-    .maybeSingle();
-  return (data?.member_id as string | undefined) ?? null;
-}
-
-export async function joinGroup(groupId: string, rawName: unknown, proof?: unknown) {
+export async function joinGroup(groupId: string, rawName: unknown) {
   const name = cleanName(rawName, 40);
   const db = serverClient();
 
-  // A table of verified people: one live human, one seat.
-  let nullifier: string | null = null;
-  const first = await getGroup(groupId);
-  if (first.group.require_human) {
-    if (!proof) throw new GroupError("This table is for verified people — verify with World ID to join", 403);
-    try {
-      nullifier = await verifyHuman(proof, seatAction(groupId));
-    } catch (e) {
-      throw new GroupError(`World ID: ${(e as Error).message}`, 403);
-    }
-    if (await seatOfHuman(nullifier)) {
-      throw new GroupError("You already have a seat at this table — use \"Get my seat back\" instead", 409);
-    }
-  }
-
-  // Two people can scan the same QR at the same moment and race for a slot.
-  // The unique (group_id, account_index) constraint catches it; try again.
+  // Two people can scan the same QR at the same moment and race for a seat.
+  // The unique (group_id, seat) constraint catches it; try again.
   for (let attempt = 0; attempt < 4; attempt++) {
     const { group, members } = await getGroup(groupId);
     assertOpen(group);
 
-    const size = poolSize();
-    if (members.length >= size) {
-      throw new GroupError(`This group is full — it holds ${size} people`, 409);
+    if (members.length >= MAX_SEATS) {
+      throw new GroupError(`Esta cuenta ya está llena — caben ${MAX_SEATS} personas`, 409);
     }
 
-    const taken = new Set(members.map((m) => m.account_index));
-    let slot = 0;
-    while (taken.has(slot)) slot++;
+    const taken = new Set(members.map((m) => m.seat));
+    let seat = 0;
+    while (taken.has(seat)) seat++;
 
     const memberId = randomId(12);
     const secret = randomBytes(32).toString("hex");
@@ -342,23 +280,17 @@ export async function joinGroup(groupId: string, rawName: unknown, proof?: unkno
       name,
       is_admin: false,
       share_cents: null,
-      account_index: slot,
-      human_verified: nullifier !== null,
+      seat,
     });
 
     if (error) {
-      if (error.code === "23505") continue; // someone took that slot first
+      if (error.code === "23505") continue; // someone took that seat first
       throw new GroupError(error.message, 502);
     }
 
-    await storeSecret(
-      memberId,
-      secret,
-      async () => {
-        await db.from("members").delete().eq("id", memberId);
-      },
-      nullifier,
-    );
+    await storeSecret(memberId, secret, async () => {
+      await db.from("members").delete().eq("id", memberId);
+    });
 
     // In an equal split a new arrival changes everyone's share.
     if (group.split_mode === "equal") {
@@ -369,13 +301,13 @@ export async function joinGroup(groupId: string, rawName: unknown, proof?: unkno
     return { memberId, secret };
   }
 
-  throw new GroupError("Too many people joined at once — try again", 503);
+  throw new GroupError("Entraron muchas personas a la vez — intenta de nuevo", 503);
 }
 
 export async function setSplitMode(groupId: string, memberId: string, secret: string, mode: unknown) {
   await authenticateAdmin(groupId, memberId, secret);
   if (mode !== "equal" && mode !== "custom" && mode !== "own") {
-    throw new GroupError("Unknown split mode");
+    throw new GroupError("Modo de reparto desconocido");
   }
 
   const { group, members } = await getGroup(groupId);
@@ -389,10 +321,7 @@ export async function setSplitMode(groupId: string, memberId: string, secret: st
     await applyEqualSplit({ ...group, split_mode: mode }, members);
   } else if (mode === "own") {
     // Everyone types what they had. Start from a clean slate.
-    const { error: e } = await db
-      .from("members")
-      .update({ share_cents: null, confirmed: false })
-      .eq("group_id", groupId);
+    const { error: e } = await db.from("members").update({ share_cents: null }).eq("group_id", groupId);
     if (e) throw new GroupError(e.message, 502);
   }
   // custom keeps the current numbers as a starting point for the admin.
@@ -409,18 +338,15 @@ export async function setShareByAdmin(
   await authenticateAdmin(groupId, memberId, secret);
   const { group, members } = await getGroup(groupId);
   assertOpen(group);
-  if (group.split_mode !== "custom") throw new GroupError("Switch to custom amounts first");
+  if (group.split_mode !== "custom") throw new GroupError("Primero cambia a montos por persona");
 
   const target = members.find((m) => m.id === targetId);
-  if (!target) throw new GroupError("That person is not in this group", 404);
+  if (!target) throw new GroupError("Esa persona no está en esta cuenta", 404);
   if (!Number.isInteger(cents) || (cents as number) < 0 || (cents as number) > group.total_cents) {
-    throw new GroupError("A share must be between $0.00 and the whole bill");
+    throw new GroupError("Una parte debe estar entre $0.00 y el total de la cuenta");
   }
 
-  const { error } = await serverClient()
-    .from("members")
-    .update({ share_cents: cents, confirmed: false })
-    .eq("id", target.id);
+  const { error } = await serverClient().from("members").update({ share_cents: cents }).eq("id", target.id);
   if (error) throw new GroupError(error.message, 502);
 }
 
@@ -429,254 +355,69 @@ export async function setOwnShare(groupId: string, memberId: string, secret: str
   const me = await authenticate(groupId, memberId, secret);
   const { group } = await getGroup(groupId);
   assertOpen(group);
-  if (group.split_mode !== "own") throw new GroupError("The admin has not asked everyone to enter their own");
+  if (group.split_mode !== "own") throw new GroupError("El admin no ha pedido que cada quien escriba lo suyo");
   if (!Number.isInteger(cents) || (cents as number) < 0 || (cents as number) > group.total_cents) {
-    throw new GroupError("Enter an amount between $0.00 and the whole bill");
+    throw new GroupError("Escribe un monto entre $0.00 y el total de la cuenta");
   }
 
-  const { error } = await serverClient()
-    .from("members")
-    .update({ share_cents: cents, confirmed: false })
-    .eq("id", me.id);
+  const { error } = await serverClient().from("members").update({ share_cents: cents }).eq("id", me.id);
   if (error) throw new GroupError(error.message, 502);
 }
 
 /**
- * Freeze the split and put the settlement on chain.
+ * Freeze the split and start collecting.
  *
- * From here the amounts are fixed: a single scheduled transaction now holds
- * every payment to the payer, pending until each person who owes has signed.
+ * From here the amounts are fixed. The person who paid the bill, and anyone
+ * whose share is zero, owe nothing — they count as paid from the start.
  */
-export async function lockGroup(
-  groupId: string,
-  memberId: string,
-  secret: string,
-  /** Absolute URL of the metered engine the plan is bought from. */
-  engineUrl: string,
-) {
+export async function startCollecting(groupId: string, memberId: string, secret: string) {
   await authenticateAdmin(groupId, memberId, secret);
   const { group, members } = await getGroup(groupId);
   assertOpen(group);
 
-  if (members.length < 2) throw new GroupError("Invite at least one person before asking for confirmations");
-  if (group.require_human) {
-    const unverified = members.filter((m) => !m.human_verified).map((m) => m.name);
-    if (unverified.length) {
-      throw new GroupError(`This table is for verified people — still to verify: ${unverified.join(", ")}`);
-    }
-  }
+  if (members.length < 2) throw new GroupError("Invita al menos a una persona antes de activar los cobros");
 
   const check = checkShares(group.total_cents, members);
-  if (!check.complete) throw new GroupError("Not everyone's share has been decided yet");
+  if (!check.complete) throw new GroupError("Todavía falta decidir la parte de alguien");
   if (!check.balanced) {
-    const off = Math.abs(check.gap) / 100;
+    const off = (Math.abs(check.gap) / 100).toFixed(2);
     throw new GroupError(
-      check.gap > 0
-        ? `The shares are $${off.toFixed(2)} short of the bill`
-        : `The shares are $${off.toFixed(2)} over the bill`,
+      check.gap > 0 ? `A las partes les faltan $${off} para llegar al total` : `Las partes se pasan del total por $${off}`,
     );
   }
 
-  if (!transfersToPayer(group.payer_id, members).length) {
-    throw new GroupError("Nobody owes anything — there is nothing to settle");
-  }
-
-  // Convert to the dollars that will actually move, at today's rate, once.
-  // The rate is frozen on the bill with its date and source, so what each
-  // person confirms is the exact dollar amount that settles.
-  let rate;
-  try {
-    rate = await usdRate(group.currency);
-  } catch (e) {
-    throw new GroupError((e as Error).message, 502);
-  }
-  const usd = toUsdCents(
-    members.map((m) => ({ id: m.id, cents: m.share_cents ?? 0 })),
-    rate.usdPerUnit,
-  );
-  const inDollars = members.map((m) => ({ id: m.id, share_cents: usd.get(m.id) ?? 0 }));
-  const owed = transfersToPayer(group.payer_id, inDollars);
-  if (owed.length === 0) {
-    throw new GroupError("Every share rounds to less than a US cent — there is nothing to settle");
-  }
-
-  // Buy the settlement plan from the metered engine, over x402, the same way
-  // any other customer would. For one bill with one payer the plan is simply
-  // "everyone pays the payer" — there is nothing to compress, and the product
-  // says so — but the app still pays for the computation, so every settlement
-  // it makes runs through the paid service rather than around it.
-  const plan = await fetchPaidPlan(engineUrl, { obligations: owed });
-  const transfers = (plan.transfers as Transfer[] | undefined) ?? [];
-
-  // The engine's plan must move exactly what is owed. If it ever disagreed,
-  // settling it would charge people amounts they never agreed to.
-  const sum = (list: Transfer[]) => list.reduce((a, t) => a + t.cents, 0);
-  if (transfers.length === 0 || sum(transfers) !== sum(owed)) {
-    throw new GroupError("The settlement plan did not match the shares — nothing was charged", 502);
-  }
-
-  const accounts = pool()!;
-  const accountMap: Record<string, string> = {};
-  for (const m of members) {
-    const acct = accounts[m.account_index];
-    if (!acct) throw new GroupError("A member has no settlement account", 503);
-    accountMap[m.id] = acct.accountId;
-  }
-  // The payer chose their own wallet: what they are owed lands there.
-  if (group.payout_account) accountMap[group.payer_id] = group.payout_account;
-
-  let scheduleId: string;
-  try {
-    ({ scheduleId } = await scheduleSettlement(transfers, accountMap, `${groupId}-${Date.now().toString(36)}`));
-  } catch (e) {
-    throw new GroupError(`The settlement could not be put on chain: ${(e as Error).message}`, 502);
-  }
+  const owed = transfersToPayer(group.payer_id, members);
+  if (!owed.length) throw new GroupError("Nadie debe nada — no hay nada que cobrar");
 
   const db = serverClient();
-  // The payer receives, and anyone whose share is zero owes nothing: neither
-  // has anything to sign, so both count as confirmed from the start.
-  const debtors = new Set(transfers.map((t) => t.from));
+  const debtors = new Set(owed.map((t) => t.from));
+  const now = new Date().toISOString();
   for (const m of members) {
+    const settled = !debtors.has(m.id);
     const { error } = await db
       .from("members")
-      .update({ confirmed: !debtors.has(m.id), settle_usd_cents: usd.get(m.id) ?? 0 })
+      .update({ paid: settled, paid_at: settled ? now : null })
       .eq("id", m.id);
     if (error) throw new GroupError(error.message, 502);
   }
 
-  const planReceipt = plan.paid && typeof plan.receipt === "string" ? plan.receipt : null;
-  const { error } = await db
-    .from("groups")
-    .update({
-      status: "locked",
-      schedule_id: scheduleId,
-      plan_receipt: planReceipt,
-      fx_usd_per_unit: rate.usdPerUnit,
-      fx_as_of: rate.asOf,
-      fx_source: rate.source,
-      settle_token: settlementToken(),
-    })
-    .eq("id", groupId);
+  const { error } = await db.from("groups").update({ status: "collecting" }).eq("id", groupId);
   if (error) throw new GroupError(error.message, 502);
-
-  return {
-    scheduleId,
-    planReceipt,
-    rate,
-    usdCents: Object.fromEntries(usd),
-  };
 }
 
-/** Throw the pending settlement away and let the split change again. */
+/** Let the split change again. Only while nobody has actually paid. */
 export async function reopenGroup(groupId: string, memberId: string, secret: string) {
   await authenticateAdmin(groupId, memberId, secret);
   const { group } = await getGroup(groupId);
-  if (group.status === "settled") throw new GroupError("This bill is already settled", 409);
+  if (group.status === "settled") throw new GroupError("Esta cuenta ya está saldada", 409);
   if (group.status === "open") return;
 
   const db = serverClient();
-  // The abandoned schedule stays pending until it expires. It can never
-  // execute without every signature — which is the whole guarantee.
-  const { error } = await db
-    .from("groups")
-    .update({
-      status: "open",
-      schedule_id: null,
-      plan_receipt: null,
-      fx_usd_per_unit: null,
-      fx_as_of: null,
-      fx_source: null,
-      settle_token: null,
-    })
-    .eq("id", groupId);
+  const { error } = await db.from("groups").update({ status: "open" }).eq("id", groupId);
   if (error) throw new GroupError(error.message, 502);
 
-  const { error: e } = await db
-    .from("members")
-    .update({ confirmed: false, settle_usd_cents: null })
-    .eq("group_id", groupId);
+  const { error: e } = await db.from("members").update({ paid: false, paid_at: null }).eq("group_id", groupId);
   if (e) throw new GroupError(e.message, 502);
-}
-
-/**
- * The payer picks their own wallet (Privy) as the place to be paid.
- * Only before confirmations start: after that the schedule already exists.
- */
-export async function setPayoutWallet(groupId: string, memberId: string, secret: string, evm: unknown) {
-  const me = await authenticateAdmin(groupId, memberId, secret);
-  const { group } = await getGroup(groupId);
-  assertOpen(group);
-  if (me.id !== group.payer_id) throw new GroupError("Only the person who paid chooses where to be paid", 403);
-  if (!isEvmAddress(evm)) throw new GroupError("That is not a wallet address");
-
-  let account: string;
-  try {
-    account = await ensureWalletAccount(evm);
-  } catch (e) {
-    throw new GroupError(`Could not prepare your wallet on Hedera: ${(e as Error).message}`, 502);
-  }
-
-  const { error } = await serverClient()
-    .from("groups")
-    .update({ payout_evm: evm.toLowerCase(), payout_account: account })
-    .eq("id", groupId);
-  if (error) throw new GroupError(error.message, 502);
-  return { account };
-}
-
-/** The admin turns "verified people only" on or off, while the bill is open. */
-export async function setRequireHuman(groupId: string, memberId: string, secret: string, on: unknown) {
-  await authenticateAdmin(groupId, memberId, secret);
-  const { group } = await getGroup(groupId);
-  assertOpen(group);
-  if (on === true && !worldConfigured()) throw new GroupError("World ID is not configured on this server", 503);
-  const { error } = await serverClient().from("groups").update({ require_human: on === true }).eq("id", groupId);
-  if (error) throw new GroupError(error.message, 502);
-}
-
-/** Someone already at the table proves they are a real, unique person. */
-export async function verifySeat(groupId: string, memberId: string, secret: string, proof: unknown) {
-  const me = await authenticate(groupId, memberId, secret);
-  let nullifier: string;
-  try {
-    nullifier = await verifyHuman(proof, seatAction(groupId));
-  } catch (e) {
-    throw new GroupError(`World ID: ${(e as Error).message}`, 403);
-  }
-  const holder = await seatOfHuman(nullifier);
-  if (holder && holder !== me.id) throw new GroupError("This person already holds another seat at this table", 409);
-
-  const db = serverClient();
-  const { error } = await db.from("member_secrets").update({ human_nullifier: nullifier }).eq("member_id", me.id);
-  if (error) throw new GroupError(error.message, 502);
-  const { error: e } = await db.from("members").update({ human_verified: true }).eq("id", me.id);
-  if (e) throw new GroupError(e.message, 502);
-}
-
-/**
- * Get a lost seat back by being the same person: Selfie Check again, same
- * nullifier for this table, same seat. No admin, no link.
- */
-export async function recoverSeat(groupId: string, proof: unknown) {
-  const { group, members } = await getGroup(groupId);
-  if (group.status === "settled") throw new GroupError("This bill is already settled", 409);
-  let nullifier: string;
-  try {
-    nullifier = await verifyHuman(proof, seatAction(groupId));
-  } catch (e) {
-    throw new GroupError(`World ID: ${(e as Error).message}`, 403);
-  }
-  const holder = await seatOfHuman(nullifier);
-  const member = members.find((m) => m.id === holder);
-  if (!member) throw new GroupError("No seat at this table belongs to this person yet", 404);
-
-  const secret = randomBytes(32).toString("hex");
-  const { error } = await serverClient()
-    .from("member_secrets")
-    .update({ secret_hash: hashSecret(secret) })
-    .eq("member_id", member.id);
-  if (error) throw new GroupError(error.message, 502);
-  return { memberId: member.id, secret };
 }
 
 /**
@@ -692,11 +433,11 @@ export async function recoverSeat(groupId: string, proof: unknown) {
 export async function reissueSeat(groupId: string, adminId: string, adminSecret: string, targetId: unknown) {
   await authenticateAdmin(groupId, adminId, adminSecret);
   const { group, members } = await getGroup(groupId);
-  if (group.status === "settled") throw new GroupError("This bill is already settled", 409);
+  if (group.status === "settled") throw new GroupError("Esta cuenta ya está saldada", 409);
 
   const target = members.find((m) => m.id === targetId);
-  if (!target) throw new GroupError("That person is not in this group", 404);
-  if (target.is_admin) throw new GroupError("That is your own seat", 400);
+  if (!target) throw new GroupError("Esa persona no está en esta cuenta", 404);
+  if (target.is_admin) throw new GroupError("Ese es tu propio lugar", 400);
 
   const secret = randomBytes(32).toString("hex");
   const { error } = await serverClient()
@@ -714,8 +455,8 @@ export async function removeMember(groupId: string, adminId: string, adminSecret
   assertOpen(group);
 
   const target = members.find((m) => m.id === targetId);
-  if (!target) throw new GroupError("That person is not in this group", 404);
-  if (target.is_admin || target.id === group.payer_id) throw new GroupError("The person who paid stays at the table", 400);
+  if (!target) throw new GroupError("Esa persona no está en esta cuenta", 404);
+  if (target.is_admin || target.id === group.payer_id) throw new GroupError("Quien pagó se queda en la mesa", 400);
 
   const db = serverClient();
   await db.from("member_secrets").delete().eq("member_id", target.id);
@@ -727,54 +468,4 @@ export async function removeMember(groupId: string, adminId: string, adminSecret
     const fresh = await getGroup(groupId);
     await applyEqualSplit(fresh.group, fresh.members);
   }
-}
-
-/**
- * A person agrees to their share — which means signing the settlement.
- *
- * The confirmation is only recorded AFTER the signature lands on chain. The
- * last signature makes the whole transaction execute.
- */
-export async function confirmShare(groupId: string, memberId: string, secret: string) {
-  const me = await authenticate(groupId, memberId, secret);
-  const { group } = await getGroup(groupId);
-
-  if (group.status === "settled") return { executed: true, scheduleId: group.schedule_id };
-  if (group.status !== "locked" || !group.schedule_id) {
-    throw new GroupError("The admin has not asked for confirmations yet", 409);
-  }
-  if (me.confirmed) return { executed: false, scheduleId: group.schedule_id };
-
-  const acct = pool()?.[me.account_index];
-  if (!acct) throw new GroupError("Your settlement account is not configured", 503);
-
-  try {
-    await signSchedule(group.schedule_id, acct.key, acct.keyType);
-  } catch (e) {
-    const msg = (e as Error).message;
-    // A retry after a signature already landed is not a failure.
-    if (!/NO_NEW_VALID_SIGNATURES|SCHEDULE_ALREADY_EXECUTED/.test(msg)) {
-      throw new GroupError(`Your signature did not go through: ${msg}`, 502);
-    }
-  }
-
-  const db = serverClient();
-  const { error } = await db.from("members").update({ confirmed: true }).eq("id", me.id);
-  if (error) throw new GroupError(error.message, 502);
-
-  const status = await scheduleStatus(group.schedule_id);
-  if (status.executed && !status.succeeded) {
-    // The last signature arrived but the transfer itself failed. Nobody paid —
-    // the transaction is all-or-nothing — so say so, and let the admin reopen.
-    throw new GroupError(
-      `Everyone confirmed, but the network rejected the payment (${status.result}). Nobody was charged — the admin can reopen and try again.`,
-      502,
-    );
-  }
-  if (status.executed) {
-    const { error: gErr } = await db.from("groups").update({ status: "settled" }).eq("id", groupId);
-    if (gErr) throw new GroupError(gErr.message, 502);
-  }
-
-  return { executed: status.executed, scheduleId: group.schedule_id };
 }

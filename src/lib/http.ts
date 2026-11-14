@@ -2,7 +2,7 @@
  * fetch with a deadline, for the browser.
  *
  * Every action in the app ends in a real network call — some of them wait on
- * Hedera. Without a deadline a stalled request leaves a spinner turning
+ * pey. Without a deadline a stalled request leaves a spinner turning
  * forever, which in a demo reads as "the app froze". With one, the person
  * gets a message and a button that works again.
  */
@@ -40,8 +40,8 @@ export function explain(e: unknown, t: (en: string, es: string) => string): stri
   }
   if (err?.message === "db_offline") {
     return t(
-      "Splitting a real bill is offline right now: the bill database cannot be reached. The sample trip still runs end to end on Hedera testnet.",
-      "Dividir una cuenta real está fuera de línea ahora: no se puede llegar a la base de datos de las cuentas. El viaje de ejemplo sigue funcionando completo en Hedera testnet.",
+      "Bills are offline right now: the bill database cannot be reached. Try again in a moment.",
+      "Las cuentas están fuera de línea ahora: no se puede llegar a la base de datos. Intenta de nuevo en un momento.",
     );
   }
   return err?.message || t("Something went wrong — try again.", "Algo salió mal — vuelve a intentarlo.");

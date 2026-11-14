@@ -20,8 +20,8 @@ export function NotFoundBody() {
         <Link href="/" className="btn btn-dark">
           {t("Back to home", "Volver al inicio")}
         </Link>
-        <Link href="/join" className="btn btn-ghost">
-          {t("Open the sample trip", "Abrir el viaje de ejemplo")}
+        <Link href="/nuevo" className="btn btn-ghost">
+          {t("Split a bill", "Dividir una cuenta")}
         </Link>
       </div>
     </main>

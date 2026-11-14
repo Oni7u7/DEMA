@@ -1,6 +1,5 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import QRCode from "qrcode";
@@ -11,28 +10,13 @@ import { LogoMark } from "@/components/Logo";
 import { PressButton, PressLink } from "@/components/Press";
 import { clearSession, loadSession, saveSession, type GroupSession } from "@/lib/groupSession";
 import { explain, fetchWithin } from "@/lib/http";
-import { formatMoney, formatUsd, type Currency } from "@/lib/money";
+import { formatMoney } from "@/lib/money";
 import { formatCents } from "@/lib/netting";
 import { checkShares, parseMoney, type SplitMode } from "@/lib/split";
 import { browserClient, supabaseConfigured } from "@/lib/supabase";
 import { useLiveBills } from "@/lib/useLiveBills";
-import { useUsdRate } from "@/lib/useUsdRate";
 
 const SPRING = { type: "spring", stiffness: 380, damping: 30 } as const;
-
-// World ID loads only where a World button is on screen, and only if configured.
-const WorldButton = dynamic(() => import("@/components/WorldButton"), { ssr: false });
-const WORLD_ON = Boolean(process.env.NEXT_PUBLIC_WORLD_APP_ID);
-// Which World ID credential is asked for: Selfie Check, or the device credential.
-const WORLD_SELFIE = process.env.NEXT_PUBLIC_WORLD_CREDENTIAL !== "device";
-// Demo mode: the World App step is simulated and every label says so.
-const WORLD_DEMO = process.env.NEXT_PUBLIC_WORLD_DEMO === "1";
-
-// Privy loads only when the payer opens their wallet — never on anyone else's path.
-const PayoutWallet = dynamic(() => import("@/components/PayoutWallet"), {
-  ssr: false,
-  loading: () => <p className="wallet-note">…</p>,
-});
 
 interface Group {
   id: string;
@@ -40,17 +24,8 @@ interface Group {
   total_cents: number;
   payer_id: string;
   split_mode: SplitMode;
-  status: "open" | "locked" | "settled";
-  schedule_id: string | null;
-  plan_receipt: string | null;
-  currency: Currency;
-  fx_usd_per_unit: number | null;
-  fx_as_of: string | null;
-  fx_source: string | null;
-  settle_token: string | null;
-  payout_evm: string | null;
-  payout_account: string | null;
-  require_human: boolean;
+  status: "open" | "collecting" | "settled";
+  currency: "MXN";
 }
 
 interface Member {
@@ -58,10 +33,9 @@ interface Member {
   name: string;
   is_admin: boolean;
   share_cents: number | null;
-  settle_usd_cents: number | null;
-  confirmed: boolean;
-  account_index: number;
-  human_verified: boolean;
+  seat: number;
+  paid: boolean;
+  paid_at: string | null;
 }
 
 /**
@@ -179,7 +153,7 @@ export default function GroupRoom() {
       setBusy(action);
       setActionError(null);
       try {
-        // Locking and confirming wait on Hedera; give them room, but not forever.
+        // Starting payments and asking pey for a charge can be slow; give them room, but not forever.
         const res = await fetchWithin(
           `/api/groups/${id}`,
           {
@@ -187,7 +161,7 @@ export default function GroupRoom() {
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ action, ...session, ...extra }),
           },
-          action === "lock" || action === "confirm" ? 70_000 : 20_000,
+          action === "start" || action === "pay" ? 45_000 : 20_000,
         );
         const data = (await res.json()) as Record<string, unknown> & { error?: string };
         if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
@@ -225,18 +199,15 @@ export default function GroupRoom() {
       return (
         <main className="phone">
           <div className="screen-head">
-            <h1 className="title">{t("Live bills are offline", "Cuentas reales fuera de línea")}</h1>
+            <h1 className="title">{t("Bills are offline", "Cuentas fuera de línea")}</h1>
           </div>
           <div className="room-pad">
             <p className="offline-note" role="status">
               {t(
-                "This bill cannot be opened right now: the bill database cannot be reached. The sample trip still settles end to end on Hedera testnet.",
-                "Esta cuenta no se puede abrir ahora: no se puede llegar a la base de datos de las cuentas. El viaje de ejemplo sigue liquidando completo en Hedera testnet.",
+                "This bill cannot be opened right now: the bill database cannot be reached. Try again in a moment.",
+                "Esta cuenta no se puede abrir ahora: no se puede llegar a la base de datos. Intenta de nuevo en un momento.",
               )}
             </p>
-            <Link href="/join" className="btn btn-dark">
-              {t("Open the sample trip", "Abrir el viaje de ejemplo")}
-            </Link>
             <Link href="/" className="btn btn-ghost">
               {t("Back to home", "Volver al inicio")}
             </Link>
@@ -244,7 +215,7 @@ export default function GroupRoom() {
         </main>
       );
     }
-    const missing = /does not exist/i.test((loadError as Error | null)?.message ?? "");
+    const missing = /does not exist|no existe/i.test((loadError as Error | null)?.message ?? "");
     return (
       <main className="phone">
         <div className="screen-head">
@@ -267,9 +238,6 @@ export default function GroupRoom() {
               {t("Try again", "Intentar de nuevo")}
             </PressButton>
           )}
-          <Link href="/join" className="btn btn-ghost">
-            {t("Open the sample trip", "Abrir el viaje de ejemplo")}
-          </Link>
         </div>
       </main>
     );
@@ -290,10 +258,6 @@ export default function GroupRoom() {
       <JoinView
         group={group}
         members={members}
-        onRecovered={async (s) => {
-          adopt(s);
-          await refresh();
-        }}
         onJoined={async (s) => {
           adopt(s);
           await refresh();
@@ -307,7 +271,7 @@ export default function GroupRoom() {
   const isPayer = me.id === group.payer_id;
   const check = checkShares(group.total_cents, members);
   const debtors = members.filter((m) => m.id !== group.payer_id && (m.share_cents ?? 0) > 0);
-  const confirmedDebtors = debtors.filter((m) => m.confirmed).length;
+  const paidDebtors = debtors.filter((m) => m.paid).length;
 
   return (
     <main className="phone">
@@ -327,9 +291,6 @@ export default function GroupRoom() {
           me={me}
           isPayer={isPayer}
           payerName={payer?.name ?? ""}
-          incomingUsd={members
-            .filter((m) => m.id !== group.payer_id)
-            .reduce((a, m) => a + (m.settle_usd_cents ?? 0), 0)}
         />
 
         {actionError !== null && (
@@ -341,35 +302,6 @@ export default function GroupRoom() {
         {group.status === "settled" && <SettledBanner />}
 
         {group.status === "open" && isAdmin && <InviteCard groupId={group.id} count={members.length} />}
-
-        {WORLD_ON && group.status === "open" && isAdmin && (
-          <HumanToggle on={group.require_human} busy={busy !== null} onChange={(on) => act("require-human", { on })} />
-        )}
-
-        {WORLD_ON && !me.human_verified && group.status !== "settled" && (
-          <section className="world-card">
-            <span className="label">
-              {t("REAL PERSON · WORLD ID", "PERSONA REAL · WORLD ID")}
-              {WORLD_DEMO && <span className="demo-tag inline">{t("DEMO", "DEMO")}</span>}
-            </span>
-            <p className="wallet-note">
-              {group.require_human
-                ? WORLD_SELFIE
-                  ? t("This table is for verified people. A quick selfie check proves you are a real, unique person — World never shows us your face.", "Esta mesa es solo para personas verificadas. Una selfie rápida prueba que eres una persona real y única — World nunca nos muestra tu cara.")
-                  : t("This table is for verified people. Verify with World App that you are a real, unique person — World never tells us who you are.", "Esta mesa es solo para personas verificadas. Verifica con World App que eres una persona real y única — World nunca nos dice quién eres.")
-                : WORLD_SELFIE
-                  ? t("Optional: prove you are a real person with a quick selfie check. If you ever lose this phone, the same check gets your seat back.", "Opcional: prueba que eres una persona real con una selfie rápida. Si pierdes este teléfono, la misma verificación te devuelve tu lugar.")
-                  : t("Optional: prove you are a real person with World App. If you ever lose this phone, verifying again gets your seat back.", "Opcional: prueba con World App que eres una persona real. Si pierdes este teléfono, verificarte de nuevo te devuelve tu lugar.")}
-            </p>
-            <WorldButton
-              groupId={group.id}
-              label={t("Verify with World ID", "Verificar con World ID")}
-              onProof={async (proof) => {
-                if ((await act("verify-human", { proof })) === null) throw new Error("rejected");
-              }}
-            />
-          </section>
-        )}
 
         {group.status === "open" && isAdmin && (
           <SplitControls
@@ -383,21 +315,10 @@ export default function GroupRoom() {
         )}
 
         {group.status === "open" && group.split_mode === "own" && (
-          <OwnShareInput me={me} busy={busy === "own-share"} currency={group.currency} onSave={(cents) => act("own-share", { cents })} />
+          <OwnShareInput me={me} busy={busy === "own-share"} onSave={(cents) => act("own-share", { cents })} />
         )}
 
-        {group.status === "locked" && (
-          <ConfirmProgress done={confirmedDebtors} total={debtors.length} />
-        )}
-
-        {group.status !== "open" && <Settlement group={group} />}
-
-        {isPayer && (group.status === "open" || group.payout_evm) && (
-          <WalletCard
-            group={group}
-            onConnect={async (evm) => (await act("payout-wallet", { evm })) !== null}
-          />
-        )}
+        {group.status === "collecting" && <ConfirmProgress done={paidDebtors} total={debtors.length} />}
 
         <MemberList
           group={group}
@@ -421,24 +342,11 @@ export default function GroupRoom() {
         {group.status === "open" && !isAdmin && (
           <p className="room-note">
             {group.split_mode === "own"
-              ? t("Enter what you had above. The admin asks for confirmations once it adds up.", "Escribe arriba lo que consumiste. El admin pide confirmaciones cuando cuadre.")
-              : t("The admin is deciding the split. You will be asked to confirm your share.", "El admin está decidiendo el reparto. Te va a pedir que confirmes tu parte.")}
+              ? t("Enter what you had above. The admin turns on payments once it adds up.", "Escribe arriba lo que consumiste. El admin activa los cobros cuando cuadre.")
+              : t("The admin is deciding the split. Once payments are on, you pay your share here with CoDi.", "El admin está decidiendo el reparto. Cuando active los cobros, pagas tu parte aquí con CoDi.")}
           </p>
         )}
 
-        {group.status === "settled" && group.schedule_id && (
-          <a
-            className="receipt-link room-receipt"
-            href={`https://hashscan.io/testnet/schedule/${encodeURIComponent(group.schedule_id)}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            {t("View the receipt", "Ver el comprobante")}
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5" />
-            </svg>
-          </a>
-        )}
       </div>
 
       <div className="foot">
@@ -448,13 +356,13 @@ export default function GroupRoom() {
               type="button"
               className="btn btn-settle"
               disabled={!check.balanced || members.length < 2 || busy !== null}
-              aria-busy={busy === "lock"}
-              onClick={() => act("lock")}
+              aria-busy={busy === "start"}
+              onClick={() => act("start")}
             >
-              {busy === "lock" ? (
-                <Busy>{t("Converting, buying the plan, putting it on chain…", "Convirtiendo, pagando el cálculo y registrando…")}</Busy>
+              {busy === "start" ? (
+                <Busy>{t("Turning on payments…", "Activando cobros…")}</Busy>
               ) : (
-                t("Ask everyone to confirm", "Pedir que todos confirmen")
+                t("Turn on payments", "Activar cobros")
               )}
             </PressButton>
             <span className="foot-hint">
@@ -466,32 +374,12 @@ export default function GroupRoom() {
                     ? check.gap > 0
                       ? t(`${formatMoney(check.gap, group.currency)} still to assign.`, `Faltan ${formatMoney(check.gap, group.currency)} por asignar.`)
                       : t(`${formatMoney(-check.gap, group.currency)} over the bill.`, `Se pasa por ${formatMoney(-check.gap, group.currency)}.`)
-                    : group.currency === "USD"
-                      ? t("It adds up. Once asked, nobody pays until everyone says yes.", "Ya cuadra. Al pedirlo, nadie paga hasta que todos digan que sí.")
-                      : t("It adds up. Asking converts every share to dollars at today's rate — nobody pays until everyone says yes.", "Ya cuadra. Al pedirlo, cada parte se convierte a dólares al tipo de cambio de hoy — nadie paga hasta que todos digan que sí.")}
+                    : t("It adds up. Turning on payments freezes the split and lets everyone pay their part with CoDi.", "Ya cuadra. Al activar los cobros se congela el reparto y cada quien puede pagar su parte con CoDi.")}
             </span>
           </>
         )}
 
-        {group.status === "locked" && !isPayer && (me.share_cents ?? 0) > 0 && (
-          <PressButton
-            type="button"
-            className="btn btn-settle"
-            disabled={me.confirmed || busy !== null}
-            aria-busy={busy === "confirm"}
-            onClick={() => act("confirm")}
-          >
-            {me.confirmed ? (
-              t("You confirmed — waiting for the rest", "Ya confirmaste — esperando a los demás")
-            ) : busy === "confirm" ? (
-              <Busy>{t("Signing…", "Firmando…")}</Busy>
-            ) : (
-              t(`Yes, I pay ${formatUsd(me.settle_usd_cents ?? 0)}`, `Sí, pago ${formatUsd(me.settle_usd_cents ?? 0)}`)
-            )}
-          </PressButton>
-        )}
-
-        {group.status === "locked" && isAdmin && (
+        {group.status === "collecting" && isAdmin && paidDebtors === 0 && (
           <PressButton type="button" className="btn btn-ghost" disabled={busy !== null} onClick={() => act("reopen")}>
             {busy === "reopen" ? <Busy>{t("Reopening…", "Reabriendo…")}</Busy> : t("Change the split", "Cambiar el reparto")}
           </PressButton>
@@ -509,118 +397,13 @@ export default function GroupRoom() {
 
 // ── pieces ──────────────────────────────────────────────────────────────────
 
-/** A spinner inside a button, so a slow chain call never looks like a dead tap. */
+/** A spinner inside a button, so a slow call never looks like a dead tap. */
 function Busy({ children }: { children: React.ReactNode }) {
   return (
     <span className="busy">
       <span className="spinner" aria-hidden="true" />
       {children}
     </span>
-  );
-}
-
-/** 0.0.X@SECONDS.NANOS  ->  0.0.X-SECONDS-NANOS, the form the explorer takes. */
-function txPath(id: string) {
-  const [account, stamp = ""] = id.split("@");
-  return `${account}-${stamp.replace(".", "-")}`;
-}
-
-/**
- * What is settling, and in what: the frozen exchange rate, the dollar token,
- * and the x402 payment that bought the plan. Each line opens on the chain or
- * names its source, so none of it is a claim on a screen.
- */
-function Settlement({ group }: { group: Group }) {
-  const { t } = useLocale();
-  const rate = group.fx_usd_per_unit;
-  const converted = rate !== null && group.currency !== "USD";
-  return (
-    <section className="settle-card" aria-label={t("How it settles", "Cómo se liquida")}>
-      <span className="label">{t("SETTLES IN DOLLARS", "SE LIQUIDA EN DÓLARES")}</span>
-      {converted && (
-        <div className="settle-line">
-          <span className="grow">{t("Rate, frozen for this bill", "Tipo de cambio, fijo para esta cuenta")}</span>
-          <span className="money">1 {group.currency} = {Number(rate).toFixed(6)} USD</span>
-        </div>
-      )}
-      {converted && (
-        <div className="settle-sub">
-          {group.fx_source} · {group.fx_as_of}
-        </div>
-      )}
-      {group.payout_account && (
-        <div className="settle-line">
-          <span className="grow">{t("Paid into the payer's own wallet", "Se paga a la cartera propia de quien pagó")}</span>
-          <a className="money receipt-link" href={`https://hashscan.io/testnet/account/${group.payout_account}`} target="_blank" rel="noreferrer">
-            {group.payout_account} ↗
-          </a>
-        </div>
-      )}
-      {group.settle_token && (
-        <a
-          className="settle-line settle-link"
-          href={`https://hashscan.io/testnet/token/${encodeURIComponent(group.settle_token)}`}
-          target="_blank"
-          rel="noreferrer"
-        >
-          <span className="grow">{t("Moves as tUSD, a Hedera dollar token", "Se mueve como tUSD, un token de dólares en Hedera")}</span>
-          <span aria-hidden="true">↗</span>
-        </a>
-      )}
-      {group.plan_receipt && (
-        <a
-          className="receipt plan-receipt"
-          href={`https://hashscan.io/testnet/transaction/${encodeURIComponent(txPath(group.plan_receipt))}`}
-          target="_blank"
-          rel="noreferrer"
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M4 12.5l5 5L20 6.5" />
-          </svg>
-          <span className="grow">
-            {t("Plan bought from the engine · paid over x402", "Cálculo comprado al motor · pagado por x402")}
-          </span>
-          <span aria-hidden="true">↗</span>
-        </a>
-      )}
-    </section>
-  );
-}
-
-/**
- * The payer's wallet: opt-in, below everything else, and it loads Privy only
- * when opened — so it can never stand between anyone and the bill.
- */
-function WalletCard({ group, onConnect }: { group: Group; onConnect: (evm: string) => Promise<boolean> }) {
-  const { t } = useLocale();
-  const [open, setOpen] = useState(!!group.payout_evm);
-  return (
-    <section className="wallet-card" aria-label={t("Where you get paid", "Dónde recibes tu dinero")}>
-      <div className="wallet-head">
-        <span className="label">{t("WHERE YOU GET PAID", "DÓNDE RECIBES TU DINERO")}</span>
-        <span className="wallet-by">Privy</span>
-      </div>
-      {open ? (
-        <PayoutWallet
-          status={group.status}
-          payoutEvm={group.payout_evm}
-          payoutAccount={group.payout_account}
-          onConnect={onConnect}
-        />
-      ) : (
-        <>
-          <p className="wallet-note">
-            {t(
-              "By default the money you are owed goes to the table's test account. You can have it land in your own wallet instead — made from your email in seconds.",
-              "Por defecto lo que te deben llega a la cuenta de prueba de la mesa. Puedes hacer que llegue a tu propia cartera — se crea con tu correo en segundos.",
-            )}
-          </p>
-          <button type="button" className="btn btn-ghost" onClick={() => setOpen(true)}>
-            {t("Use my own wallet", "Usar mi propia cartera")}
-          </button>
-        </>
-      )}
-    </section>
   );
 }
 
@@ -635,8 +418,8 @@ function SettledBanner() {
         <path className="draw-check" d="M4 12.5l5 5L20 6.5" />
       </svg>
       <div>
-        <strong>{t("Paid. Everyone is at zero.", "Pagado. Todos quedaron en cero.")}</strong>
-        <span>{t("Every transfer went through at once, in one transaction.", "Todas las transferencias salieron juntas, en una sola transacción.")}</span>
+        <strong>{t("Bill settled. Everyone paid their part.", "Cuenta saldada. Todos pagaron su parte.")}</strong>
+        <span>{t("Every payment was confirmed by the server.", "Cada pago lo confirmó el servidor.")}</span>
       </div>
     </section>
   );
@@ -647,9 +430,9 @@ function StatusChip({ status }: { status: Group["status"] }) {
   const label =
     status === "open"
       ? t("Splitting", "Repartiendo")
-      : status === "locked"
-        ? t("Confirming", "Confirmando")
-        : t("Settled", "Liquidada");
+      : status === "collecting"
+        ? t("Collecting", "Cobrando")
+        : t("Settled", "Saldada");
   return (
     <AnimatePresence mode="popLayout" initial={false}>
       <motion.span
@@ -671,26 +454,22 @@ function YourShare({
   me,
   isPayer,
   payerName,
-  incomingUsd,
 }: {
   group: Group;
   me: Member;
   isPayer: boolean;
   payerName: string;
-  incomingUsd: number;
 }) {
   const { t } = useLocale();
   const reduce = useReducedMotion();
-  const live = useUsdRate(group.status === "open" && group.currency !== "USD" ? group.currency : null);
   const share = me.share_cents;
-  const frozen = group.status !== "open";
   const owedToMe = group.total_cents - (share ?? 0);
 
   let caption: string;
   if (group.status === "settled") {
     caption = isPayer
-      ? t("Settled. Everyone paid you.", "Liquidada. Todos te pagaron.")
-      : t(`Settled. You paid ${payerName}.`, `Liquidada. Le pagaste a ${payerName}.`);
+      ? t("Settled. Everyone paid you.", "Saldada. Todos te pagaron.")
+      : t(`Settled. You paid ${payerName}.`, `Saldada. Le pagaste a ${payerName}.`);
   } else if (isPayer) {
     caption = t(
       `You paid. The others owe you ${formatMoney(owedToMe, group.currency)}.`,
@@ -700,22 +479,6 @@ function YourShare({
     caption = t("Your share is not decided yet.", "Todavía no se decide tu parte.");
   } else {
     caption = t(`You owe ${payerName}.`, `Le debes a ${payerName}.`);
-  }
-
-  // What this person will actually pay in dollars: frozen once confirmations
-  // start, an estimate at today's rate before that.
-  let dollars: string | null = null;
-  if (isPayer && frozen && incomingUsd > 0) {
-    dollars = t(`You receive ${formatUsd(incomingUsd)} in dollars`, `Recibes ${formatUsd(incomingUsd)} en dólares`);
-  } else if (!isPayer && share !== null && share > 0) {
-    if (frozen && me.settle_usd_cents !== null) {
-      dollars = t(`You pay ${formatUsd(me.settle_usd_cents)} in dollars`, `Pagas ${formatUsd(me.settle_usd_cents)} en dólares`);
-    } else if (group.currency !== "USD" && live) {
-      dollars = t(
-        `≈ ${formatUsd(Math.round(share * live.usdPerUnit))} at today's rate`,
-        `≈ ${formatUsd(Math.round(share * live.usdPerUnit))} al tipo de cambio de hoy`,
-      );
-    }
   }
 
   const amount = share === null ? "—" : formatCents(share);
@@ -741,7 +504,6 @@ function YourShare({
         </AnimatePresence>
         <span className="your-currency">{group.currency}</span>
       </span>
-      {dollars && <span className={frozen ? "your-usd frozen" : "your-usd"}>{dollars}</span>}
       <span className="your-caption">{caption}</span>
     </section>
   );
@@ -924,12 +686,10 @@ function CustomShareRow({
 function OwnShareInput({
   me,
   busy,
-  currency,
   onSave,
 }: {
   me: Member;
   busy: boolean;
-  currency: Currency;
   onSave: (cents: number) => void;
 }) {
   const { t } = useLocale();
@@ -955,7 +715,7 @@ function OwnShareInput({
             placeholder="0.00"
             aria-label={t("What you had", "Lo que consumiste")}
           />
-          <span className="money-unit">{currency}</span>
+          <span className="money-unit">MXN</span>
         </span>
         <PressButton type="submit" className="btn btn-dark btn-inline" disabled={cents === null || busy}>
           {busy ? t("Saving…", "Guardando…") : t("Save", "Guardar")}
@@ -975,7 +735,7 @@ function ConfirmProgress({ done, total }: { done: number; total: number }) {
           {done}
         </span>
         <span>
-          {t(`of ${total} confirmed`, `de ${total} confirmaron`)}
+          {t(`of ${total} paid`, `de ${total} pagaron`)}
         </span>
       </div>
       <div className="confirm-bar" aria-hidden="true">
@@ -991,8 +751,8 @@ function ConfirmProgress({ done, total }: { done: number; total: number }) {
       </div>
       <p className="room-note">
         {t(
-          "All payments are one transaction waiting on chain. It executes the moment the last person says yes — and not a second before.",
-          "Todos los pagos son una sola transacción esperando en la cadena. Se ejecuta en cuanto el último dice que sí — ni un segundo antes.",
+          "Each person pays their own share with CoDi. A name turns green only when the server receives the bank's confirmation.",
+          "Cada quien paga su parte con CoDi. Un nombre se pone en verde solo cuando el servidor recibe la confirmación del banco.",
         )}
       </p>
     </section>
@@ -1018,7 +778,6 @@ function MemberList({
 }) {
   const { t } = useLocale();
   const reduce = useReducedMotion();
-  const frozen = group.status !== "open";
   return (
     <section>
       <span className="label">
@@ -1046,20 +805,14 @@ function MemberList({
                 <span className="member-name">
                   {m.name}
                   {m.id === meId ? ` (${t("you", "tú")})` : ""}
-                  {m.human_verified && (
-                    <span className="human-badge" title={t("Verified real person (World ID)", "Persona real verificada (World ID)")}>
-                      ✓ {t("verified", "verificado")}
-                      {WORLD_DEMO ? " · demo" : ""}
-                    </span>
-                  )}
                 </span>
                 <span className="member-role">
                   {isPayer
                     ? t("Paid the bill", "Pagó la cuenta")
-                    : group.status === "locked"
-                      ? m.confirmed
-                        ? t("Confirmed", "Confirmó")
-                        : t("Waiting for them", "Falta que confirme")
+                    : group.status === "collecting"
+                      ? m.paid
+                        ? t("Paid", "Pagó")
+                        : t("Still to pay", "Falta que pague")
                       : group.status === "settled"
                         ? t("Paid", "Pagó")
                         : m.share_cents === null
@@ -1069,20 +822,17 @@ function MemberList({
               </span>
               <span className="member-money">
                 <span className="money">{m.share_cents === null ? "—" : formatCents(m.share_cents)}</span>
-                {frozen && !isPayer && m.settle_usd_cents !== null && m.settle_usd_cents > 0 && (
-                  <span className="money-usd">{formatUsd(m.settle_usd_cents)}</span>
-                )}
               </span>
-              {group.status === "locked" && owes && (
-                <span className={m.confirmed ? "tick on" : "tick"} aria-label={m.confirmed ? t("confirmed", "confirmó") : t("pending", "pendiente")}>
-                  {m.confirmed ? (
+              {group.status === "collecting" && owes && (
+                <span className={m.paid ? "tick on" : "tick"} aria-label={m.paid ? t("paid", "pagó") : t("pending", "pendiente")}>
+                  {m.paid ? (
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <path className="draw-check" d="M4 12.5l5 5L20 6.5" />
                     </svg>
                   ) : null}
                 </span>
               )}
-              {isAdmin && !m.is_admin && group.status !== "settled" && !(group.status === "locked" && m.confirmed) && (
+              {isAdmin && !m.is_admin && group.status !== "settled" && !(group.status === "collecting" && m.paid) && (
                 <span className="member-tools">
                   <button
                     type="button"
@@ -1126,30 +876,6 @@ function MemberList({
         </p>
       )}
     </section>
-  );
-}
-
-/** "Verified people only": one live human per seat, one seat per human. */
-function HumanToggle({ on, busy, onChange }: { on: boolean; busy: boolean; onChange: (on: boolean) => void }) {
-  const { t } = useLocale();
-  return (
-    <label className="human-toggle">
-      <span className="grow">
-        <strong>{t("Verified people only", "Solo personas verificadas")}</strong>
-        <small>
-          {WORLD_SELFIE
-            ? t(
-                "Everyone passes World ID Selfie Check to take a seat — no fake guests, no one person holding two seats.",
-                "Cada quien pasa Selfie Check de World ID para entrar — sin invitados falsos ni una persona con dos lugares.",
-              )
-            : t(
-                "Everyone verifies with World ID to take a seat — no fake guests, no one person holding two seats.",
-                "Cada quien se verifica con World ID para entrar — sin invitados falsos ni una persona con dos lugares.",
-              )}
-        </small>
-      </span>
-      <input type="checkbox" role="switch" checked={on} disabled={busy} onChange={(e) => onChange(e.target.checked)} />
-    </label>
   );
 }
 
@@ -1242,12 +968,10 @@ function JoinView({
   group,
   members,
   onJoined,
-  onRecovered,
 }: {
   group: Group;
   members: Member[];
   onJoined: (s: GroupSession) => Promise<void> | void;
-  onRecovered: (s: GroupSession) => Promise<void> | void;
 }) {
   const { t } = useLocale();
   const [name, setName] = useState("");
@@ -1258,11 +982,10 @@ function JoinView({
 
   async function join(e: React.FormEvent) {
     e.preventDefault();
-    if (group.require_human) return; // the World button joins, with its proof
     await joinWith();
   }
 
-  async function joinWith(proof?: unknown) {
+  async function joinWith() {
     if (!name.trim() || busy) return;
     setBusy(true);
     setError(null);
@@ -1272,7 +995,7 @@ function JoinView({
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ action: "join", name, proof }),
+          body: JSON.stringify({ action: "join", name }),
         },
         45_000,
       );
@@ -1300,13 +1023,13 @@ function JoinView({
         {closed ? (
           <p className="form-error" role="alert">
             {group.status === "settled"
-              ? t("This bill is already settled.", "Esta cuenta ya se liquidó.")
-              : t("Confirmations have started, so nobody new can join.", "Ya empezaron las confirmaciones, así que ya no puede entrar nadie nuevo.")}
+              ? t("This bill is already settled.", "Esta cuenta ya está saldada.")
+              : t("Payments have started, so nobody new can join.", "Ya empezaron los cobros, así que ya no puede entrar nadie nuevo.")}
           </p>
         ) : null}
 
         {closed ? (
-          group.status === "locked" && (
+          group.status === "collecting" && (
             <p className="join-foot">
               {t(
                 "Already at this table from another phone or browser? Ask the admin to tap the QR next to your name — scanning it gives you your seat back.",
@@ -1334,54 +1057,16 @@ function JoinView({
                 {explain(error, t)}
               </p>
             )}
-            {group.require_human ? (
-              WORLD_ON && (
-                <WorldButton
-                  groupId={group.id}
-                  className="btn btn-dark"
-                  disabled={!name.trim() || busy}
-                  label={t("Verify with World ID and join", "Verificar con World ID y entrar")}
-                  onProof={async (proof) => {
-                    await joinWith(proof);
-                  }}
-                />
-              )
-            ) : (
-              <PressButton type="submit" className="btn btn-dark" disabled={!name.trim() || busy}>
-                {busy ? <Busy>{t("Joining…", "Entrando…")}</Busy> : t("Join the table", "Entrar a la mesa")}
-              </PressButton>
-            )}
+            <PressButton type="submit" className="btn btn-dark" disabled={!name.trim() || busy}>
+              {busy ? <Busy>{t("Joining…", "Entrando…")}</Busy> : t("Join the table", "Entrar a la mesa")}
+            </PressButton>
             <p className="join-foot">
               {t(
-                "You will see your share and confirm it. Nobody pays until everyone agrees.",
-                "Vas a ver tu parte y confirmarla. Nadie paga hasta que todos estén de acuerdo.",
+                "You will see your share and pay it from your bank app with CoDi.",
+                "Vas a ver tu parte y pagarla desde la app de tu banco con CoDi.",
               )}
             </p>
           </>
-        )}
-        {WORLD_ON && group.status !== "settled" && (
-          <div className="world-recover">
-            <span className="join-foot">
-              {t("Already had a seat and verified it with World?", "¿Ya tenías lugar y lo verificaste con World?")}
-            </span>
-            <WorldButton
-              groupId={group.id}
-              label={t("Get my seat back with World ID", "Recuperar mi lugar con World ID")}
-              onProof={async (proof) => {
-                const res = await fetchWithin(
-                  `/api/groups/${group.id}`,
-                  { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "recover-human", proof }) },
-                  30_000,
-                );
-                const data = (await res.json()) as { memberId?: string; secret?: string; error?: string };
-                if (!res.ok || !data.memberId || !data.secret) {
-                  setError(new Error(data.error ?? `Error ${res.status}`));
-                  throw new Error(data.error ?? "rejected");
-                }
-                await onRecovered({ memberId: data.memberId, secret: data.secret });
-              }}
-            />
-          </div>
         )}
       </form>
     </main>

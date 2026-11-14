@@ -1,9 +1,10 @@
 import type { MetadataRoute } from "next";
+import { SITE } from "@/lib/site";
 
-// Las pantallas de un grupo concreto (firmar, cerrar, unirse) son privadas.
+// Una cuenta concreta es privada: solo la ve quien tiene el QR.
 export default function robots(): MetadataRoute.Robots {
   return {
-    rules: { userAgent: "*", allow: "/", disallow: ["/api/", "/g/", "/sign", "/done", "/join", "/login", "/plan"] },
-    sitemap: "https://squash-pay.vercel.app/sitemap.xml",
+    rules: { userAgent: "*", allow: "/", disallow: ["/api/", "/g/"] },
+    sitemap: `${SITE}/sitemap.xml`,
   };
 }

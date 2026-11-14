@@ -4,39 +4,33 @@ import { LogoMark, Wordmark } from "@/components/Logo";
 import { Logo3D } from "@/components/Logo3D";
 import { PressLink } from "@/components/Press";
 import { Reveal } from "@/components/Reveal";
-import { DebtGraph } from "@/components/DebtGraph";
-import { CountUp, Magnetic, ReplayInView, ScrollProgress, TiltCard } from "@/components/LandingMotion";
+import { CountUp, Magnetic, TiltCard, ScrollProgress } from "@/components/LandingMotion";
 import { useLocale } from "@/components/Locale";
-import { formatUsd } from "@/lib/money";
-import { formatCents, netExpenses } from "@/lib/netting";
-import { tripPeople, VALLE_DE_BRAVO } from "@/lib/sample";
+import { formatCents } from "@/lib/netting";
+import { equalShares } from "@/lib/split";
 import { useLiveBills } from "@/lib/useLiveBills";
-import { useUsdRate } from "@/lib/useUsdRate";
 
-const TOKEN_URL = "https://hashscan.io/testnet/token/0.0.10511085";
-const SAMPLE_BILL = 250_000; // $2,500.00 MXN
+/** The example on the page: a $2,500 dinner for six, split by the same code the app runs. */
+const SAMPLE_BILL = 250_000;
+const SAMPLE_PEOPLE = 6;
 
 /**
- * The front door.
- *
- * It leads with the thing a person does — split a bill at the table — and
- * then shows why it can be trusted: the dollars are exact at today's rate
- * (test dollars on Hedera testnet), nobody pays until everyone agrees, and
- * the on-chain numbers link to the chain. The engine numbers are computed by
- * the same solver the product runs, not typed in.
+ * The landing: what Cuadra does, in the order it happens at the table.
+ * Every number on it comes from the same split code the app uses.
  */
 export default function Landing() {
-  const { t, locale } = useLocale();
-  const { grossEdges, transfers, compression } = netExpenses(VALLE_DE_BRAVO.expenses);
-  const people = VALLE_DE_BRAVO.people.length;
-  const rate = useUsdRate("MXN");
+  const { t } = useLocale();
   const live = useLiveBills();
+  const shares = [...equalShares(SAMPLE_BILL, Array.from({ length: SAMPLE_PEOPLE }, (_, i) => `p${i}`)).values()];
+  // Rosa paid; four of the other five already paid their share by CoDi.
+  const collected = shares.slice(1, 5).reduce((a, c) => a + c, 0);
+  const owedTotal = SAMPLE_BILL - shares[0];
   const offlineNote =
     live === "offline" ? (
       <span className="lp-status" role="status">
         {t(
-          "Live bills are offline right now — their database cannot be reached. The sample trip still settles end to end on Hedera testnet.",
-          "Las cuentas reales están fuera de línea ahora — no se puede llegar a su base de datos. El viaje de ejemplo sigue liquidando completo en Hedera testnet.",
+          "Bills are offline right now — their database cannot be reached. Try again in a moment.",
+          "Las cuentas están fuera de línea ahora — no se puede llegar a su base de datos. Intenta de nuevo en un momento.",
         )}
       </span>
     ) : null;
@@ -44,63 +38,38 @@ export default function Landing() {
   return (
     <main className="landing">
       <ScrollProgress />
-      <nav className="lp-top" aria-label="Squash">
+      <nav className="lp-top" aria-label="Cuadra">
         <LogoMark size={38} badge />
         <Wordmark width={120} />
       </nav>
 
       <header className="lp-hero">
         <div className="lp-hero-copy">
-          <span className="lp-kicker">{t("Split the bill · Hedera testnet", "Divide la cuenta · Hedera testnet")}</span>
-          <h1 aria-label={t("Nobody pays until everyone says yes.", "Nadie paga hasta que todos digan que sí.")}>
-            <Words text={t("Nobody pays until", "Nadie paga hasta que")} />{" "}
+          <span className="lp-kicker">{t("Split the bill · paid with CoDi", "Divide la cuenta · se paga con CoDi")}</span>
+          <h1 aria-label={t("Everyone pays their part. No screenshots.", "Cada quien paga su parte. Sin comprobantes.")}>
+            <Words text={t("Everyone pays their part.", "Cada quien paga su parte.")} />{" "}
             <span className="lp-accent">
-              <Words text={t("everyone says yes.", "todos digan que sí.")} offset={4} />
+              <Words text={t("No screenshots.", "Sin comprobantes.")} offset={4} />
             </span>
           </h1>
           <p className="lp-lead">
             {t(
-              "One person pays the dinner and shows a QR. Everyone scans it, sees their share live, and taps yes. The pesos become dollars at today's rate, and one transaction settles it all — only on the last yes.",
-              "Una persona paga la cena y enseña un QR. Todos lo escanean, ven su parte en vivo y dicen que sí. Los pesos se vuelven dólares al tipo de cambio de hoy, y una sola transacción liquida todo — solo con el último sí.",
+              "One person pays the dinner and shows a QR. Everyone scans it, sees their share, and pays it from their bank app with CoDi. One screen shows who already paid and how much is missing — confirmed by the server, not by a photo of a transfer.",
+              "Una persona paga la cena y enseña un QR. Todos lo escanean, ven su parte y la pagan desde la app de su banco con CoDi. Una sola pantalla muestra quién ya pagó y cuánto falta — confirmado por el servidor, no por la foto de una transferencia.",
             )}
           </p>
           <div className="lp-cta">
-            {/* With live bills offline, the sample trip is what works, so it
-                takes the primary button instead of a form that cannot open. */}
-            {live === "offline" ? (
-              <>
-                <Magnetic>
-                  <PressLink href="/join" className="btn btn-dark lp-cta-main">
-                    {t("See the sample trip", "Ver el viaje de ejemplo")}
-                    <CtaArrow />
-                  </PressLink>
-                </Magnetic>
-                <Magnetic strength={0.15}>
-                  <PressLink href="/nuevo" className="btn btn-ghost lp-cta-alt">
-                    {t("Split a bill", "Dividir una cuenta")}
-                  </PressLink>
-                </Magnetic>
-              </>
-            ) : (
-              <>
-                <Magnetic>
-                  <PressLink href="/nuevo" className="btn btn-dark lp-cta-main">
-                    {t("Split a bill", "Dividir una cuenta")}
-                    <CtaArrow />
-                  </PressLink>
-                </Magnetic>
-                <Magnetic strength={0.15}>
-                  <PressLink href="/join" className="btn btn-ghost lp-cta-alt">
-                    {t("See the sample trip", "Ver el viaje de ejemplo")}
-                  </PressLink>
-                </Magnetic>
-              </>
-            )}
+            <Magnetic>
+              <PressLink href="/nuevo" className="btn btn-dark lp-cta-main">
+                {t("Split a bill", "Dividir una cuenta")}
+                <CtaArrow />
+              </PressLink>
+            </Magnetic>
           </div>
           {offlineNote}
         </div>
         <div className="lp-hero-mark">
-          <Logo3D alt={t("Squash logo: an eye inside a network of connections", "Logo de Squash: un ojo dentro de una red de conexiones")} />
+          <Logo3D alt={t("Cuadra logo: an eye inside a network of connections", "Logo de Cuadra: un ojo dentro de una red de conexiones")} />
         </div>
       </header>
 
@@ -123,61 +92,47 @@ export default function Landing() {
           <FlowStep
             n={3}
             motion="check"
-            title={t("Everyone says yes", "Todos dicen que sí")}
-            body={t("It is one pending transaction on Hedera. The last yes executes it. If one person never agrees, nobody pays.", "Es una sola transacción pendiente en Hedera. El último sí la ejecuta. Si alguien no acepta, nadie paga.")}
+            title={t("Each one pays with CoDi", "Cada quien paga con CoDi")}
+            body={t("A payment request lands in each person's bank app, or they scan a CoDi QR. When the bank confirms, their name turns green on every phone.", "A cada quien le llega una solicitud de cobro a la app de su banco, o escanea un QR CoDi. Cuando el banco confirma, su nombre se pone en verde en todos los teléfonos.")}
             icon={<path d="M4 12.5l5 5L20 6.5" />}
           />
         </section>
       </Reveal>
 
       <Reveal>
-        <section className="lp-dollars" aria-labelledby="lp-dollars-title">
+        <section className="lp-dollars" aria-labelledby="lp-board-title">
           <div className="lp-dollars-copy">
-            <span className="lp-kicker">{t("Exact to the cent", "Exacto al centavo")}</span>
-            <h2 id="lp-dollars-title">{t("Pesos in, dollars out", "Entran pesos, salen dólares")}</h2>
+            <span className="lp-kicker">{t("One screen for the whole table", "Una pantalla para toda la mesa")}</span>
+            <h2 id="lp-board-title">{t("Who paid, and how much is missing", "Quién pagó y cuánto falta")}</h2>
             <ul className="lp-points">
-              <Point icon={<path d="M3 12h4l3-8 4 16 3-8h4" />}>
-                <strong>{t("Today's rate, frozen.", "El tipo de cambio de hoy, congelado.")}</strong>{" "}
-                {t("It is fixed on the bill the moment confirmations start, so everyone agrees to the exact dollars that move.", "Se fija en la cuenta al pedir confirmaciones: todos aceptan exactamente los dólares que se van a mover.")}
+              <Point icon={<path d="M4 12.5l5 5L20 6.5" />}>
+                <strong>{t("Confirmed by the server.", "Confirmado por el servidor.")}</strong>{" "}
+                {t("A share counts as paid only when pey notifies our server, with a signed message. The browser can never mark anyone paid.", "Una parte cuenta como pagada solo cuando pey avisa a nuestro servidor, con un mensaje firmado. El navegador nunca puede marcar a nadie como pagado.")}
               </Point>
-              <Point icon={<path d="M12 3v18M7 8h7a3 3 0 010 6H9a3 3 0 000 6h8" />}>
-                <strong>{t("Not a cent lost.", "Sin perder un centavo.")}</strong>{" "}
-                {t("The dollar shares always add up to the converted total.", "Las partes en dólares siempre suman el total convertido.")}
+              <Point icon={<path d="M4 7h16M4 12h10M4 17h6" />}>
+                <strong>{t("Never charged twice.", "Nunca se cobra dos veces.")}</strong>{" "}
+                {t("A repeated notice is recorded and ignored. A second payment from the same person is flagged for a refund.", "Un aviso repetido se registra y se ignora. Un segundo pago de la misma persona se marca para devolución.")}
               </Point>
-              <Point icon={<><circle cx="12" cy="12" r="9" /><path d="M12 7v10M9 10h4.5a1.5 1.5 0 010 3H10a1.5 1.5 0 000 3h5" /></>}>
-                <strong>{t("Dollars on Hedera.", "Dólares en Hedera.")}</strong>{" "}
-                {t("Here they are tUSD, a Hedera testnet token where one unit is one cent and nothing is worth real money. The token is a setting; nothing runs on mainnet.", "Aquí son tUSD, un token de la red de pruebas de Hedera donde una unidad es un centavo y nada vale dinero real. El token es configurable; nada corre en la red principal.")}
+              <Point icon={<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>}>
+                <strong>{t("Late is still paid.", "Tarde también cuenta.")}</strong>{" "}
+                {t("If a payment arrives after its request expired, it is applied anyway — nobody is asked to pay again.", "Si un pago llega después de que venció la solicitud, se aplica igual — nadie tiene que pagar otra vez.")}
               </Point>
             </ul>
           </div>
 
           <div className="lp-fx-card" aria-live="polite">
-            <span className="label">{t("A $2,500 DINNER, TODAY", "UNA CENA DE $2,500, HOY")}</span>
+            <span className="label">{t("A $2,500 DINNER FOR SIX", "UNA CENA DE $2,500 ENTRE SEIS")}</span>
             <div className="lp-fx-row">
-              <CountUp className="lp-fx-big" to={SAMPLE_BILL} format={(v) => formatCents(Math.round(v))} />
+              <CountUp className="lp-fx-big" to={collected} format={(v) => formatCents(Math.round(v))} />
               <span className="lp-fx-unit">MXN</span>
             </div>
-            <svg className="lp-fx-arrow" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M12 4v16M6 14l6 6 6-6" />
-            </svg>
-            <div className="lp-fx-row">
-              {rate ? (
-                <CountUp
-                  className="lp-fx-big lp-fx-usd"
-                  to={Math.round(SAMPLE_BILL * rate.usdPerUnit)}
-                  format={(v) => formatUsd(Math.round(v))}
-                  duration={1.8}
-                />
-              ) : (
-                <span className="lp-fx-big lp-fx-usd">US$—</span>
-              )}
-            </div>
             <span className="lp-fx-rate">
-              {rate ? t(`1 MXN = ${rate.usdPerUnit} USD · ${rate.asOf}`, `1 MXN = ${rate.usdPerUnit} USD · ${rate.asOf}`) : t("Getting today's rate…", "Consultando el tipo de cambio…")}
+              {t(`collected of ${formatCents(owedTotal)} · 1 person left`, `cobrados de ${formatCents(owedTotal)} · falta 1 persona`)}
             </span>
-            <a className="lp-chip" href={TOKEN_URL} target="_blank" rel="noreferrer">
-              tUSD · Hedera ↗
-            </a>
+            <div className="bento-meter" aria-hidden="true">
+              <span className="on" /><span className="on" /><span className="on" /><span className="on" /><span />
+            </div>
+            <span className="lp-chip">{t(`${formatCents(shares[1])} each`, `${formatCents(shares[1])} c/u`)}</span>
           </div>
         </section>
       </Reveal>
@@ -186,94 +141,41 @@ export default function Landing() {
         <section className="lp-bento" aria-labelledby="lp-bento-title">
           <header className="lp-bento-head">
             <span className="lp-kicker">{t("How it holds together", "Cómo se sostiene")}</span>
-            <h2 id="lp-bento-title">{t("Four pieces, one promise", "Cuatro piezas, una sola promesa")}</h2>
+            <h2 id="lp-bento-title">{t("A confirmed payment, a verifiable action", "Un pago confirmado, una acción verificable")}</h2>
           </header>
 
-          <TiltCard className="bento bento-hedera" max={4}>
-            <BentoIcon><path d="M4 12.5l5 5L20 6.5" /></BentoIcon>
-            <span className="bento-by">Hedera · Scheduled Transactions</span>
-            <h3>{t("Nobody pays until the last yes", "Nadie paga hasta el último sí")}</h3>
+          <TiltCard className="bento bento-codi" max={4}>
+            <BentoIcon><><rect x="6" y="2" width="12" height="20" rx="3" /><path d="M11 18h2" /></></BentoIcon>
+            <span className="bento-by">CoDi · pey</span>
+            <h3>{t("A request straight to the bank app", "Un cobro directo a la app del banco")}</h3>
             <p>
               {t(
-                "Every payment of the bill is one transaction waiting on chain. It executes the moment the last person confirms — and if one person never does, no money moves for anyone.",
-                "Todos los pagos de la cuenta son una sola transacción esperando en la cadena. Se ejecuta en cuanto confirma el último — y si alguien nunca confirma, no se mueve el dinero de nadie.",
+                "Type your 10-digit number and a CoDi payment request arrives in your bank app for exactly your share. No card, no account number, no transfer to copy by hand.",
+                "Escribe tu número a 10 dígitos y te llega a la app de tu banco una solicitud de cobro CoDi por exactamente tu parte. Sin tarjeta, sin CLABE, sin transferencia que copiar a mano.",
               )}
             </p>
-            <div className="bento-meter" aria-hidden="true">
-              <span className="on" /><span className="on" /><span className="on" /><span />
-            </div>
           </TiltCard>
 
-          <TiltCard className="bento bento-x402" max={4}>
-            <BentoIcon><path d="M4 7h16M4 12h10M4 17h6" /></BentoIcon>
-            <span className="bento-by">x402 · Blocky402</span>
-            <h3>{t("The engine charges per use", "El motor cobra por uso")}</h3>
-            <p>
-              {t("Each plan is bought over x402: a 402, a payment, the answer. No API key, no subscription — and the fee is sponsored.", "Cada plan se compra con x402: un 402, un pago, la respuesta. Sin llave de API ni suscripción — y la comisión va patrocinada.")}
-            </p>
+          <TiltCard className="bento bento-qr" max={4}>
+            <BentoIcon><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 18h2v2h-2z" /></BentoIcon>
+            <span className="bento-by">CoDi QR</span>
+            <h3>{t("Or scan a QR", "O escanea un QR")}</h3>
+            <p>{t("Prefer not to share your number? Each share also comes as a CoDi QR for its exact amount.", "¿Prefieres no dar tu número? Cada parte también sale como un QR CoDi por su monto exacto.")}</p>
           </TiltCard>
 
-          <TiltCard className="bento bento-privy" max={4}>
-            <BentoIcon><><rect x="3" y="6" width="18" height="13" rx="3" /><path d="M3 10h18M16 14.5h2" /></></BentoIcon>
-            <span className="bento-by">Privy</span>
-            <h3>{t("Get paid in your own wallet", "Cobra en tu propia cartera")}</h3>
-            <p>
-              {t("On a live bill, whoever paid can sign in with an email and receive the dollars in a wallet they own — no seed phrase, no crypto words.", "En una cuenta real, quien pagó puede entrar con su correo y recibir los dólares en una cartera suya — sin frases secretas ni palabras cripto.")}
-            </p>
-            <span className="bento-tag">{t("Live bills only · not in the sample trip", "Solo en cuentas reales · no en el viaje de ejemplo")}</span>
+          <TiltCard className="bento bento-webhook" max={4}>
+            <BentoIcon><path d="M12 3l8 4v5c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V7z" /></BentoIcon>
+            <span className="bento-by">{t("Signed webhooks", "Webhooks firmados")}</span>
+            <h3>{t("Only the server says “paid”", "Solo el servidor dice “pagado”")}</h3>
+            <p>{t("Every notice from pey is checked against its signature and stored before anything changes.", "Cada aviso de pey se verifica con su firma y se guarda antes de cambiar nada.")}</p>
           </TiltCard>
 
-          <TiltCard className="bento bento-world" max={4}>
-            <BentoIcon><><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.8 3 2.8 15 0 18M12 3c-2.8 3-2.8 15 0 18" /></></BentoIcon>
-            <span className="bento-by">World ID · Selfie Check</span>
-            <h3>{t("One real person, one seat", "Una persona real, un lugar")}</h3>
-            <p>
-              {t("A live bill can ask for verified people: no fake guests, nobody holding two seats — and a lost seat comes back by verifying again.", "Una cuenta real puede pedir personas verificadas: sin invitados falsos ni alguien con dos lugares — y si pierdes tu lugar, lo recuperas verificándote otra vez.")}
-            </p>
-            <span className="bento-tag">{t("Demo: the World App step is simulated and labelled", "Demo: el paso de World App es simulado y está rotulado")}</span>
+          <TiltCard className="bento bento-events" max={4}>
+            <BentoIcon><path d="M3 12h4l3-8 4 16 3-8h4" /></BentoIcon>
+            <span className="bento-by">{t("Payment events", "Eventos de pago")}</span>
+            <h3>{t("Every notice, on the record", "Cada aviso, registrado")}</h3>
+            <p>{t("The admin sees each notice that arrived — including the repeated ones that were ignored.", "Quien administra ve cada aviso que llegó — incluidos los repetidos que se ignoraron.")}</p>
           </TiltCard>
-        </section>
-      </Reveal>
-
-      <Reveal>
-        <section className="lp-engine" aria-labelledby="lp-engine-title">
-          <ReplayInView className="lp-engine-graph">
-            <DebtGraph nodes={tripPeople(locale).map((p) => ({ id: p.id, initial: p.initial, name: p.name, isYou: p.isYou }))} grossEdges={grossEdges} transfers={transfers} />
-          </ReplayInView>
-          <div className="lp-engine-copy">
-            <span className="lp-kicker">{t("For a whole trip", "Para un viaje entero")}</span>
-            <h2 id="lp-engine-title">{t("Squashed to the provable minimum", "Comprimido al mínimo demostrable")}</h2>
-            <div className="lp-engine-numbers">
-              <CountUp className="lp-n" style={{ color: "var(--owed)" }} to={grossEdges.length} format={(v) => String(Math.round(v))} />
-              <svg width="30" height="16" viewBox="0 0 34 18" fill="none" stroke="var(--muted)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M1 9h29M24 3l7 6-7 6" />
-              </svg>
-              <CountUp className="lp-n" style={{ color: "var(--settled)" }} from={grossEdges.length} to={transfers.length} format={(v) => String(Math.round(v))} duration={1.8} />
-            </div>
-            <p className="lp-engine-cap">
-              {t(
-                `${grossEdges.length} crossed debts between ${people} friends become ${transfers.length} payments — ${Math.round(compression * 100)}% fewer. Not an estimate: the most disjoint groups that sum to zero, found exactly.`,
-                `${grossEdges.length} deudas cruzadas entre ${people} amigos se vuelven ${transfers.length} pagos — ${Math.round(compression * 100)}% menos. No es un estimado: los grupos disjuntos que suman cero, encontrados exactamente.`,
-              )}
-            </p>
-            <PressLink href="/join" className="btn btn-ghost lp-engine-cta">
-              {t("Open the sample trip", "Abrir el viaje de ejemplo")}
-            </PressLink>
-          </div>
-        </section>
-      </Reveal>
-
-      <Reveal>
-        <section className="lp-proofs" aria-labelledby="lp-proofs-title">
-          <h2 id="lp-proofs-title">{t("Check it yourself", "Compruébalo tú")}</h2>
-          <p className="lp-muted">{t("What happens on chain opens on HashScan, Hedera's public testnet explorer — and the code is public.", "Lo que pasa en la cadena se abre en HashScan, el explorador público de la red de pruebas de Hedera — y el código es público.")}</p>
-          <div className="lp-chips">
-            <a className="lp-chip" href="https://hashscan.io/testnet/transaction/0.0.7162784-1789249485-560257425" target="_blank" rel="noreferrer">{t("A plan paid over x402 ↗", "Un plan pagado con x402 ↗")}</a>
-            <a className="lp-chip" href="https://hashscan.io/testnet/schedule/0.0.10510675" target="_blank" rel="noreferrer">{t("A bill settled on the last yes ↗", "Una cuenta liquidada con el último sí ↗")}</a>
-            <a className="lp-chip" href="https://hashscan.io/testnet/transaction/0.0.10450391-1789253509-329841529" target="_blank" rel="noreferrer">{t("US$88.40 moved in tUSD ↗", "US$88.40 movidos en tUSD ↗")}</a>
-            <a className="lp-chip" href="https://hashscan.io/testnet/topic/0.0.10452145" target="_blank" rel="noreferrer">{t("Proof of every run (HCS) ↗", "Prueba de cada cálculo (HCS) ↗")}</a>
-            <a className="lp-chip" href="https://github.com/ALFA117/squash" target="_blank" rel="noreferrer">{t("The code ↗", "El código ↗")}</a>
-          </div>
         </section>
       </Reveal>
 
@@ -281,7 +183,7 @@ export default function Landing() {
         <section className="lp-final">
           <LogoMark size={64} className="lp-final-mark" />
           <h2>{t("Is the bill already here?", "¿Ya llegó la cuenta?")}</h2>
-          <p>{t("Open it, show the QR, and let the table say yes.", "Ábrela, enseña el QR y deja que la mesa diga que sí.")}</p>
+          <p>{t("Open it, show the QR, and let everyone pay their part.", "Ábrela, enseña el QR y que cada quien pague su parte.")}</p>
           <Magnetic>
             <PressLink href="/nuevo" className="btn lp-final-cta">
               {t("Split a bill", "Dividir una cuenta")}
@@ -298,11 +200,11 @@ export default function Landing() {
         </div>
         <p>
           {t(
-            "Hedera testnet. The exchange rate, the charge for the plan and the settlement really happen; the people at the table settle from test accounts the app holds, and the dollars are test dollars.",
-            "Red de pruebas de Hedera. El tipo de cambio, el cobro por el plan y la liquidación ocurren de verdad; la gente en la mesa liquida desde cuentas de prueba que tiene la app, y los dólares son de prueba.",
+            "Payments in Mexican pesos with CoDi, through pey. Built on the bill-splitting engine of Squash, an earlier project by the team.",
+            "Pagos en pesos mexicanos con CoDi, a través de pey. Basado en el motor de división de cuentas de Squash, proyecto previo del equipo.",
           )}
         </p>
-        <span className="lp-muted">Squash · ETHOnline 2026</span>
+        <span className="lp-muted">Cuadra · Hackathon Cursor 2026</span>
       </footer>
     </main>
   );

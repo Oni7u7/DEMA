@@ -2616,151 +2616,7 @@ a[class*="avatar"] {
   }
 }
 
-/* ── the payer's wallet (Privy) ─────────────────────────────────────────── */
-
-.wallet-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 16px;
-  border-radius: 12px;
-  background: var(--surface);
-  border: 1px solid var(--rule);
-}
-
-.wallet-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.wallet-by {
-  font-family: var(--f-mono);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-  border: 1px solid var(--rule);
-  border-radius: 999px;
-  padding: 2px 8px;
-}
-
-.wallet-body,
-.wallet-send {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.wallet-note {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--muted);
-}
-
-.wallet-ok {
-  margin: 0;
-  font-size: 13.5px;
-  color: var(--settled-strong);
-}
-
-.wallet-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13.5px;
-}
-
-.wallet-balance {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 12px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--settled) 8%, var(--surface));
-}
-
-.wallet-balance strong {
-  font-size: 24px;
-  font-weight: 500;
-  color: var(--settled-strong);
-}
-
-.wallet-card .btn {
-  height: 48px;
-}
-
-/* ── World ID ───────────────────────────────────────────────────────────── */
-
-.world-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 16px;
-  border-radius: 12px;
-  background: var(--surface);
-  border: 1px solid var(--rule);
-}
-
-.world-card .btn,
-.world-recover .btn {
-  height: 48px;
-}
-
-.world-recover {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 8px;
-  padding-top: 14px;
-  border-top: 1px solid var(--rule);
-}
-
-.human-badge {
-  margin-left: 6px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--settled-strong);
-  background: color-mix(in srgb, var(--settled) 12%, transparent);
-  white-space: nowrap;
-}
-
-.human-toggle {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border-radius: 12px;
-  background: var(--surface);
-  border: 1px solid var(--rule);
-  cursor: pointer;
-}
-
-.human-toggle strong {
-  display: block;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.human-toggle small {
-  display: block;
-  margin-top: 2px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--muted);
-}
-
-.human-toggle input {
-  width: 44px;
-  height: 26px;
-  flex-shrink: 0;
-  accent-color: var(--settled);
-  cursor: pointer;
-}
-
-/* ── World App simulation (demo) ────────────────────────────────────────── */
+/* ── "SIMULADO" tag (PEY_MOCK) ───────────────────────────────────────────── */
 
 .demo-tag {
   margin-left: auto;
@@ -2777,74 +2633,6 @@ a[class*="avatar"] {
 
 .demo-tag.inline {
   margin-left: 8px;
-}
-
-.world-sim-head {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-}
-
-.world-sim-logo {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: var(--ink);
-  color: var(--bg);
-}
-
-.world-sim-frame {
-  position: relative;
-  width: 220px;
-  height: 220px;
-  border-radius: 50%;
-  overflow: hidden;
-  display: grid;
-  place-items: center;
-  background: var(--surface-2);
-  border: 3px solid var(--rule);
-  color: var(--muted);
-}
-
-.world-sim-frame video {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  transform: scaleX(-1);
-  opacity: 0;
-}
-
-.world-sim-frame video.on {
-  opacity: 1;
-}
-
-.world-sim-frame.done {
-  border-color: var(--settled);
-}
-
-.world-sim-ring {
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  border: 4px solid transparent;
-  border-top-color: var(--settled);
-  border-right-color: var(--settled);
-  animation: spin 900ms linear infinite;
-}
-
-.world-sim-ok {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: color-mix(in srgb, var(--settled) 70%, transparent);
-  color: #fff;
 }
 
 :root[data-theme="dark"] .demo-tag {
@@ -3044,23 +2832,23 @@ a[class*="avatar"] {
   color: var(--muted);
 }
 
-.bento-hedera {
+.bento-codi {
   grid-column: span 4;
   background:
     radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--settled) 16%, transparent), transparent 55%),
     var(--surface);
 }
 
-.bento-hedera h3 {
+.bento-codi h3 {
   font-size: 24px;
 }
 
-.bento-x402 {
+.bento-qr {
   grid-column: span 2;
 }
 
-.bento-privy,
-.bento-world {
+.bento-webhook,
+.bento-events {
   grid-column: span 3;
 }
 
@@ -3222,10 +3010,10 @@ a[class*="avatar"] {
   .lp-bento {
     grid-template-columns: 1fr;
   }
-  .bento-hedera,
-  .bento-x402,
-  .bento-privy,
-  .bento-world {
+  .bento-codi,
+  .bento-qr,
+  .bento-webhook,
+  .bento-events {
     grid-column: auto;
   }
 }
@@ -3399,7 +3187,7 @@ a[class*="avatar"] {
   transform: scale(1.12) rotate(-6deg);
 }
 
-.bento-world .bento-icon svg {
+.bento-events .bento-icon svg {
   animation: globe 9s linear infinite;
 }
 
@@ -3407,11 +3195,11 @@ a[class*="avatar"] {
   to { transform: rotate(360deg); }
 }
 
-.bento-privy .bento-icon {
+.bento-webhook .bento-icon {
   position: relative;
 }
 
-.bento-privy .bento-icon::after {
+.bento-webhook .bento-icon::after {
   content: "";
   position: absolute;
   width: 8px;
@@ -3431,7 +3219,7 @@ a[class*="avatar"] {
   60%, 100% { transform: translateY(18px); opacity: 0; }
 }
 
-.bento-x402 .bento-icon path {
+.bento-qr .bento-icon path {
   stroke-dasharray: 16;
   animation: meter-lines 2s ease-in-out infinite;
 }
@@ -3508,9 +3296,9 @@ a[class*="avatar"] {
   .step-check .lp-step-icon path,
   .lp-flow > *,
   .lp-bento > *,
-  .bento-world .bento-icon svg,
-  .bento-privy .bento-icon::after,
-  .bento-x402 .bento-icon path,
+  .bento-events .bento-icon svg,
+  .bento-webhook .bento-icon::after,
+  .bento-qr .bento-icon path,
   .lp-fx-arrow,
   .lp-chips .lp-chip,
   .lp-final::before,
@@ -3700,4 +3488,13 @@ body { isolation: isolate; }
 :root[data-theme="dark"] .phone { background: color-mix(in srgb, #10161e 90%, transparent); }
 @media (max-width: 767px) {
   .amb-beam { display: none; }
+}
+
+/* ── cuadra: wordmark as text ──────────────────────────────────────────── */
+.wordmark-text {
+  font-family: "Sora", system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: currentColor;
 }

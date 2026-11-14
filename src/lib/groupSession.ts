@@ -14,7 +14,7 @@ export interface GroupSession {
   secret: string;
 }
 
-const key = (groupId: string) => `squash:group:${groupId}`;
+const key = (groupId: string) => `cuadra:group:${groupId}`;
 
 export function loadSession(groupId: string): GroupSession | null {
   try {

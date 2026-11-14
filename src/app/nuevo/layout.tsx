@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Split a bill",
-  description:
-    "Open a bill, show the QR at the table, and settle it on Hedera testnet only when everyone says yes.",
+  title: "Dividir una cuenta",
+  description: "Abre una cuenta, enseña el QR en la mesa y que cada quien pague su parte con CoDi.",
   alternates: { canonical: "/nuevo" },
 };
 

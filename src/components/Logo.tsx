@@ -15,20 +15,18 @@ export function LogoMark({ size = 32, className = "", badge = false }: { size?: 
       className={`logo-mask ${size < 72 ? "logo-mark-bold" : "logo-mark"} ${badge ? "" : className}`}
       style={{ width: size, height: Math.round(size * (1480 / 1760)) }}
       role="img"
-      aria-label="Squash"
+      aria-label="Cuadra"
     />
   );
   if (!badge) return mark;
   return <span className={`logo-badge ${className}`}>{mark}</span>;
 }
 
+/** The name, set in the display face. Sized by width so callers keep their layout. */
 export function Wordmark({ width = 112, className = "" }: { width?: number; className?: string }) {
   return (
-    <span
-      className={`logo-mask logo-word ${className}`}
-      style={{ width, height: Math.round(width * (334 / 2024)) }}
-      role="img"
-      aria-label="Squash"
-    />
+    <span className={`wordmark-text ${className}`} style={{ fontSize: Math.round(width / 4.2) }}>
+      cuadra
+    </span>
   );
 }

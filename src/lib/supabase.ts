@@ -1,13 +1,14 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * Two clients, one key, different powers.
+ * Two clients, different powers.
  *
- * Both use the PUBLIC publishable key. What separates them is the
- * x-squash-token header: row-level security only lets a request write when the
- * SHA-256 of that header matches the hash baked into the database. The browser
- * client never has the token, so it can read a group — which is the whole
- * point of an invitation QR — and nothing more.
+ * The browser uses the public anon key. Row-level security lets it READ a
+ * group, its members and its charges — that is what an invitation QR is for —
+ * and nothing else: no writes, no secrets, no webhook payloads.
+ *
+ * The server uses the service role key, which bypasses row-level security.
+ * Every write goes through it, after groups.ts has checked who is asking.
  */
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -31,19 +32,20 @@ export function browserClient(): SupabaseClient {
   return browser;
 }
 
+let server: SupabaseClient | null = null;
+
 /**
- * The server's client. Carries the write token, so it must never run in a
+ * The server's client. Holds the service role key, so it must never run in a
  * browser — the guard below fails loudly rather than leaking it.
  */
 export function serverClient(): SupabaseClient {
   if (typeof window !== "undefined") {
     throw new Error("serverClient() must never run in the browser");
   }
-  const token = process.env.SQUASH_WRITE_TOKEN;
-  if (!url || !anonKey || !token) throw new Error("Supabase server access is not configured");
-
-  return createClient(url, anonKey, {
-    auth: { persistSession: false },
-    global: { headers: { "x-squash-token": token } },
-  });
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceKey) throw new Error("Supabase server access is not configured");
+  if (!server) {
+    server = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  }
+  return server;
 }

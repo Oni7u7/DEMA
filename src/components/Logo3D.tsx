@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 /**
- * The Squash mark, in three dimensions, with a heartbeat.
+ * The Cuadra mark (inherited from Squash), in three dimensions, with a heartbeat.
  *
  * The logo is split in two, both taken from the real artwork:
  *  - the network — every edge and the eye — traced to SVG with the vertices

@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 // A bill at the table: private to whoever holds the QR, so it is not indexed
 // and has no canonical of its own.
 export const metadata: Metadata = {
-  title: "A bill at the table",
+  title: "Una cuenta en la mesa",
   alternates: { canonical: null },
   robots: { index: false, follow: false },
 };

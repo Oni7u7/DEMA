@@ -11,20 +11,27 @@ type LocaleContextValue = {
 };
 
 const LocaleContext = createContext<LocaleContextValue | null>(null);
-const STORAGE_KEY = "squash-locale";
+const STORAGE_KEY = "cuadra-locale";
 
 export function LocaleProvider({ children }: { children: ReactNode }) {
-  // English is intentional: it is the public default for the submission.
-  const [locale, setLocaleState] = useState<Locale>("en");
+  // Spanish by default: the people at the table pay with CoDi, in Mexico.
+  const [locale, setLocaleState] = useState<Locale>("es");
 
   useEffect(() => {
-    const saved = window.localStorage.getItem(STORAGE_KEY);
-    if (saved === "es") setLocaleState("es");
+    try {
+      if (window.localStorage.getItem(STORAGE_KEY) === "en") setLocaleState("en");
+    } catch {
+      // No storage: stay in Spanish.
+    }
   }, []);
 
   const setLocale = (next: Locale) => {
     setLocaleState(next);
-    window.localStorage.setItem(STORAGE_KEY, next);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, next);
+    } catch {
+      // Remembered for this visit only.
+    }
   };
 
   useEffect(() => {

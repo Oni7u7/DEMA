@@ -18,7 +18,7 @@ export async function GET() {
 
 /** POST /api/groups — start a bill. Whoever creates it paid it, and is admin. */
 export async function POST(request: Request) {
-  let body: { adminName?: unknown; groupName?: unknown; totalCents?: unknown; currency?: unknown };
+  let body: { adminName?: unknown; groupName?: unknown; totalCents?: unknown };
   try {
     body = (await request.json()) as typeof body;
   } catch {

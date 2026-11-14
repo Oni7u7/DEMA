@@ -21,7 +21,6 @@ function check(): Promise<LiveBills> {
 
 /**
  * Whether live bills (QR, shared table, realtime) can be served right now.
- * The sample trip does not depend on this: it runs on Hedera testnet alone.
  */
 export function useLiveBills(): LiveBills {
   const [state, setState] = useState<LiveBills>("checking");

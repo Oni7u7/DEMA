@@ -2,35 +2,29 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { LanguageToggle, LocaleProvider } from "@/components/Locale";
 import Providers from "@/components/Providers";
+import { SITE } from "@/lib/site";
 import { AmbientBackground } from "@/components/AmbientBackground";
 import { THEME_SCRIPT, ThemeToggle } from "@/components/ThemeToggle";
 
-const SITE = "https://squash-pay.vercel.app";
+const TITLE = "Cuadra — divide la cuenta y que cada quien pague su parte con CoDi";
+const DESCRIPTION =
+  "Divide un gasto en la mesa con un QR. Cada persona recibe su cobro CoDi y una sola pantalla muestra quién ya pagó y cuánto falta, sin juntar comprobantes.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE),
   alternates: { canonical: "/" },
-  title: {
-    default: "Squash — split the bill, nobody pays until everyone says yes",
-    template: "%s · Squash",
-  },
-  description:
-    "Split a bill at the table by QR. Pesos convert to dollars at today's rate, and one Hedera transaction settles it only when everyone has confirmed.",
+  title: { default: TITLE, template: "%s · Cuadra" },
+  description: DESCRIPTION,
   openGraph: {
     type: "website",
     url: SITE,
-    siteName: "Squash",
-    title: "Squash — nobody pays until everyone says yes",
-    description:
-      "Split a bill at the table by QR. One Hedera testnet transaction settles it only when everyone has confirmed.",
-    images: [{ url: "/brand/logo.png", alt: "Squash" }],
+    siteName: "Cuadra",
+    locale: "es_MX",
+    title: TITLE,
+    description: DESCRIPTION,
+    images: [{ url: "/brand/logo.png", alt: "Cuadra" }],
   },
-  twitter: {
-    card: "summary",
-    title: "Squash — nobody pays until everyone says yes",
-    description: "Split a bill at the table by QR. One Hedera testnet transaction settles it on the last yes.",
-    images: ["/brand/logo.png"],
-  },
+  twitter: { card: "summary", title: TITLE, description: DESCRIPTION, images: ["/brand/logo.png"] },
 };
 
 export const viewport = {
@@ -42,7 +36,7 @@ export const viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="es" suppressHydrationWarning>
       <head>
         {/* Before first paint: pick light or dark so there is no flash. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />

@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { useLocale } from "./Locale";
 
 type Theme = "light" | "dark";
-const KEY = "squash-theme";
+const KEY = "cuadra-theme";
 
 /**
  * Runs before the first paint (inlined in <head>), so a dark-mode visitor

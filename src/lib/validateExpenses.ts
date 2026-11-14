@@ -3,11 +3,8 @@ import type { Expense } from "./netting";
 /**
  * The single gate every client-supplied expense list passes through.
  *
- * Both /api/plan and /api/settle take expenses from the browser, and both
- * spend the app's own money: the first buys a netting run from the engine, the
- * second puts a transaction on chain. So the input is bounded here, once, and
- * the two routes cannot drift apart — the plan a person sees and the plan that
- * settles are computed from exactly the same validated list.
+ * /api/v1/net takes expenses from any caller, so the input is bounded here,
+ * once: how many expenses, how many people, how long a label, how much money.
  */
 
 export const LIMITS = {

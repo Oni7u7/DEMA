@@ -11,21 +11,13 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@hashgraph/sdk": "^2.81.0",
-    "@privy-io/react-auth": "^3.42.0",
     "@supabase/supabase-js": "^2.116.0",
-    "@worldcoin/idkit": "^4.2.3",
-    "@worldcoin/idkit-server": "^1.1.1",
-    "@x402/core": "^2.25.0",
-    "@x402/fetch": "^2.25.0",
-    "@x402/hedera": "^2.25.0",
     "motion": "^13.2.0",
     "next": "16.3.4",
     "qrcode": "^1.5.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "three": "^0.180.0",
-    "viem": "^2.56.0"
+    "three": "^0.180.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

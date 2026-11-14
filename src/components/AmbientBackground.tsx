@@ -5,7 +5,7 @@ import {
   motion, useMotionValue, useReducedMotion, useScroll, useSpring, useTransform, type MotionValue,
 } from "motion/react";
 
-/* Fondo ambiental (receta 1 de /diseno, adaptada a Squash).
+/* Fondo ambiental (receta 1 de /diseno, adaptada de Squash).
    Aurora suave, una constelación en canvas cuyas líneas son deudas (rojo
    "owed") que se vuelven liquidaciones (verde "settled") al acercarse, y
    objetos CSS 3D del tema: monedas de peso y dólar con canto real, bloques de
@@ -30,7 +30,7 @@ const FULL: Shape[] = [
   { kind: "gyro",  x: "88%", y: "30%", size: 220, depth: 0.9, spin: 40, tone: "gold", mobile: true },
   { kind: "coin",  x: "6%",  y: "16%", size: 96,  depth: 0.8, spin: 12, tone: "info", label: "$", mobile: true },
   { kind: "cube",  x: "62%", y: "74%", size: 80,  depth: 0.6, spin: 30, tone: "gold", mobile: true },
-  { kind: "coin",  x: "10%", y: "60%", size: 70,  depth: 0.5, spin: 10, delay: -4, tone: "gold", label: "US$", mobile: true }, // in the gutter, clear of the hero copy
+  { kind: "coin",  x: "10%", y: "60%", size: 70,  depth: 0.5, spin: 10, delay: -4, tone: "gold", label: "MX$", mobile: true }, // in the gutter, clear of the hero copy
   { kind: "cube",  x: "54%", y: "84%", size: 50,  depth: 0.3, spin: 18, delay: -4, tone: "violet" },
   { kind: "gyro",  x: "2%",  y: "78%", size: 140, depth: 0.35, spin: 28, delay: -12, tone: "info" },
   { kind: "coin",  x: "42%", y: "30%", size: 46,  depth: 0.22, spin: 9, delay: -6, tone: "info", label: "$" },
@@ -41,7 +41,7 @@ const CALM: Shape[] = [
   { kind: "coin",  x: "80%", y: "8%",  size: 84,  depth: 0.55, spin: 16, tone: "gold", label: "$", mobile: true },
   { kind: "cube",  x: "4%",  y: "58%", size: 70,  depth: 0.4, spin: 34, tone: "info", mobile: true },
   { kind: "gyro",  x: "86%", y: "70%", size: 120, depth: 0.3, spin: 44, delay: -10, tone: "gold" },
-  { kind: "coin",  x: "40%", y: "90%", size: 40,  depth: 0.2, spin: 12, delay: -5, tone: "info", label: "US$" },
+  { kind: "coin",  x: "40%", y: "90%", size: 40,  depth: 0.2, spin: 12, delay: -5, tone: "info", label: "MX$" },
 ];
 
 // gold = verde "settled", info = ámbar del riel, violet = rojo "owed" atenuado.
