@@ -3498,3 +3498,437 @@ body { isolation: isolate; }
   line-height: 1;
   color: currentColor;
 }
+
+/* ── cuadra: paying a share ────────────────────────────────────────────── */
+.mono {
+  font-family: var(--f-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.pay-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--rule);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.pay-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pay-amount {
+  font-family: var(--f-display);
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--owed);
+}
+.pay-amount span {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.pay-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pay-alt {
+  align-self: center;
+  min-height: 44px;
+}
+
+.pay-warn {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--rail) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--rail) 40%, transparent);
+}
+
+.pay-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.pay-wait {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.countdown {
+  font-family: var(--f-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.pay-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.pay-qr {
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  border-radius: 16px;
+  background: #fff;
+  border: 1px solid var(--rule);
+  align-self: center;
+}
+.pay-qr img {
+  display: block;
+  width: min(220px, 62vw);
+  height: auto;
+}
+
+.pay-sub {
+  margin: 0;
+  text-align: center;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.pay-done {
+  border-color: color-mix(in srgb, var(--settled) 45%, var(--rule));
+}
+.pay-done-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.pay-done-row strong {
+  display: block;
+  font-size: 17px;
+}
+.pay-done-row span {
+  font-size: 14px;
+  color: var(--settled);
+}
+.pay-check {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--settled);
+}
+
+.pay-facts {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+.pay-facts > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+.pay-facts dt {
+  color: var(--muted);
+}
+.pay-facts dd {
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+/* PEY_MOCK: playing pey's part. */
+.sim-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px dashed #f0c96a;
+  background: color-mix(in srgb, #ffe9b8 35%, transparent);
+}
+.sim-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.sim-title .demo-tag.inline {
+  margin-left: 0;
+}
+.sim-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sim-note {
+  margin: 0;
+  font-size: 13px;
+  font-family: var(--f-mono);
+  overflow-wrap: anywhere;
+}
+
+/* ── cuadra: the table board ───────────────────────────────────────────── */
+.board {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--rule);
+  border-radius: 18px;
+  background: var(--surface);
+}
+.board-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.board-amount {
+  font-family: var(--f-display);
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--settled);
+}
+.board-amount span {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.board-left {
+  font-size: 14px;
+  color: var(--owed);
+}
+.board-left.done {
+  color: var(--settled);
+}
+.board-bar {
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.board-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--settled);
+  transform-origin: left center;
+}
+.board-settled {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  font-family: var(--f-display);
+  font-size: 22px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--settled);
+}
+
+.confetti {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.confetti i {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 12px;
+  border-radius: 2px;
+  background: hsl(calc(var(--i) * 26deg + 120deg) 70% 55%);
+  opacity: 0;
+  animation: cuadra-burst 1100ms var(--ease-out) forwards;
+  animation-delay: calc(var(--i) * 18ms);
+}
+@keyframes cuadra-burst {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(cos(var(--i) * 25.7deg) * 150px - 50%), calc(sin(var(--i) * 25.7deg) * 90px - 50%)) rotate(calc(var(--i) * 60deg));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .confetti {
+    display: none;
+  }
+}
+
+.board-link {
+  align-self: center;
+  min-height: 44px;
+  text-align: center;
+}
+
+/* ── cuadra: payment events ────────────────────────────────────────────── */
+.events {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.events-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+.event {
+  display: flex;
+  gap: 12px;
+  padding: 10px 14px;
+  border-left: 3px solid transparent;
+}
+.event + .event {
+  border-top: 1px solid var(--rule);
+}
+.event-time {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+  padding-top: 2px;
+}
+.event-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.event-result {
+  font-size: 14px;
+  font-weight: 600;
+}
+.event-meta {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.event.ev-ok {
+  border-left-color: var(--settled);
+}
+.event.ev-ok .event-result {
+  color: var(--settled);
+}
+.event.ev-dup {
+  border-left-color: var(--muted);
+}
+.event.ev-dup .event-result {
+  color: var(--muted);
+}
+.event.ev-warn {
+  border-left-color: var(--owed);
+}
+.event.ev-warn .event-result {
+  color: var(--owed);
+}
+
+/* ── cuadra: the big screen (?mesa) ────────────────────────────────────── */
+.board-screen {
+  position: relative;
+  z-index: 1;
+  width: min(960px, 100%);
+  margin: 0 auto;
+  padding: 40px 16px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.board-screen-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.board-screen-head h1 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--f-display);
+  font-size: clamp(26px, 5vw, 44px);
+}
+.board-screen-head span {
+  color: var(--muted);
+}
+.board-big .board-amount {
+  font-size: clamp(36px, 7vw, 64px);
+}
+.board-big .board-left {
+  font-size: clamp(16px, 2.4vw, 22px);
+}
+.board-big .board-bar {
+  height: 20px;
+}
+.board-big .board-settled {
+  font-size: clamp(24px, 4vw, 36px);
+  padding: 18px;
+}
+.board-wait {
+  font-size: 20px;
+  color: var(--muted);
+}
+.board-people {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+.board-people li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  font-size: 18px;
+}
+.board-people li.paid {
+  border-color: color-mix(in srgb, var(--settled) 50%, var(--rule));
+}
+.board-people .board-state {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--owed);
+}
+.board-people li.paid .board-state {
+  color: var(--settled);
+}
+.board-foot {
+  font-size: 14px;
+  color: var(--muted);
+}

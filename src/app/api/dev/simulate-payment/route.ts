@@ -21,8 +21,8 @@ export const dynamic = "force-dynamic";
  *   kind "pay"    (default) the payment arrives.
  *   kind "repeat" the SAME notice arrives again (same webhook-id and
  *                 transaction) — it must be recorded and ignored.
- *   kind "second" a DIFFERENT payment of the same charge — it must be
- *                 flagged for a refund.
+ *   kind "second" (QR only) the same QR paid a second time, a DIFFERENT
+ *                 transaction — it must be flagged for a refund.
  */
 export async function POST(request: Request) {
   if (!isMock()) return new NextResponse(null, { status: 404 });
@@ -40,6 +40,11 @@ export async function POST(request: Request) {
   const charge = data as ChargeRow | null;
   if (!charge) return NextResponse.json({ error: "Ese cobro no existe" }, { status: 404 });
   if (!charge.simulated) return NextResponse.json({ error: "Solo se simulan cobros simulados" }, { status: 409 });
+
+  // A push request is paid at most once; only a QR can be scanned twice.
+  if (kind === "second" && charge.method !== "qr") {
+    return NextResponse.json({ error: "Solo un QR se puede pagar dos veces" }, { status: 409 });
+  }
 
   // The first payment of a charge keeps one transaction id, so "repeat" can
   // send it again byte for byte.

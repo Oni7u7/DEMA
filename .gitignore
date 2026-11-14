@@ -21,3 +21,6 @@ demo-accounts.json
 
 # The example has names only, no values — it is meant to be committed.
 !.env.local.example
+
+# Local Claude Code config
+.claude/

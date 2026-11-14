@@ -15,6 +15,7 @@ import { formatCents } from "@/lib/netting";
 import { checkShares, parseMoney, type SplitMode } from "@/lib/split";
 import { browserClient, supabaseConfigured } from "@/lib/supabase";
 import { useLiveBills } from "@/lib/useLiveBills";
+import { PaymentEvents, PayPanel, SimTag, TableBoard, type Charge, type EventRow } from "./pay";
 
 const SPRING = { type: "spring", stiffness: 380, damping: 30 } as const;
 
@@ -52,6 +53,10 @@ export default function GroupRoom() {
 
   const [group, setGroup] = useState<Group | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [charges, setCharges] = useState<Charge[]>([]);
+  const [simulated, setSimulated] = useState(false);
+  // ?mesa — the big-screen view of the table, for anyone, no seat needed.
+  const [boardMode, setBoardMode] = useState(false);
   // Raw failures, explained at render time so they follow the language toggle.
   const [loadError, setLoadError] = useState<unknown>(null);
   const [session, setSession] = useState<GroupSession | null>(null);
@@ -73,12 +78,20 @@ export default function GroupRoom() {
     const mine = ++issued.current;
     try {
       const res = await fetchWithin(`/api/groups/${id}`, { cache: "no-store" }, 15_000);
-      const data = (await res.json()) as { group?: Group; members?: Member[]; error?: string };
+      const data = (await res.json()) as {
+        group?: Group;
+        members?: Member[];
+        charges?: Charge[];
+        simulated?: boolean;
+        error?: string;
+      };
       if (!res.ok || !data.group) throw new Error(data.error ?? `Error ${res.status}`);
       if (mine < applied.current) return;
       applied.current = mine;
       setGroup(data.group);
       setMembers(data.members ?? []);
+      setCharges(data.charges ?? []);
+      setSimulated(Boolean(data.simulated));
       setListSeq(mine);
       setLoadError(null);
     } catch (e) {
@@ -106,6 +119,7 @@ export default function GroupRoom() {
       sessionSince.current = issued.current;
       setSession(loadSession(id));
     }
+    setBoardMode(new URLSearchParams(window.location.search).has("mesa"));
     setSessionChecked(true);
     void refresh();
   }, [id, refresh, adopt]);
@@ -136,6 +150,7 @@ export default function GroupRoom() {
         .channel(`group-${id}`)
         .on("postgres_changes", { event: "*", schema: "public", table: "members", filter: `group_id=eq.${id}` }, soon)
         .on("postgres_changes", { event: "*", schema: "public", table: "groups", filter: `id=eq.${id}` }, soon)
+        .on("postgres_changes", { event: "*", schema: "public", table: "charges", filter: `group_id=eq.${id}` }, soon)
         .subscribe();
     }
 
@@ -180,6 +195,23 @@ export default function GroupRoom() {
   );
 
   const me = useMemo(() => members.find((m) => m.id === session?.memberId) ?? null, [members, session]);
+
+  // Payment events are read quietly — never through `act`, so loading them
+  // does not freeze the buttons or show an error over the table.
+  const loadEvents = useCallback(async (): Promise<EventRow[] | null> => {
+    if (!session) return null;
+    try {
+      const res = await fetchWithin(
+        `/api/groups/${id}`,
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "events", ...session }) },
+        15_000,
+      );
+      const data = (await res.json()) as { events?: EventRow[] };
+      return res.ok ? (data.events ?? []) : null;
+    } catch {
+      return null;
+    }
+  }, [id, session]);
 
   // A saved session for a member who is no longer here is stale; drop it so
   // the join form shows instead of a broken view — but only on the word of a
@@ -253,6 +285,10 @@ export default function GroupRoom() {
     );
   }
 
+  if (boardMode) {
+    return <BoardView group={group} members={members} simulated={simulated} />;
+  }
+
   if (!me) {
     return (
       <JoinView
@@ -272,12 +308,21 @@ export default function GroupRoom() {
   const check = checkShares(group.total_cents, members);
   const debtors = members.filter((m) => m.id !== group.payer_id && (m.share_cents ?? 0) > 0);
   const paidDebtors = debtors.filter((m) => m.paid).length;
+  const owedTotal = debtors.reduce((a, m) => a + (m.share_cents ?? 0), 0);
+  const collected = debtors.filter((m) => m.paid).reduce((a, m) => a + (m.share_cents ?? 0), 0);
+  const myCharges = charges.filter((c) => c.member_id === me.id);
+  const owesSomething = !isPayer && (me.share_cents ?? 0) > 0;
+  // Changes whenever a payment lands, so the events list re-reads.
+  const version = `${charges.map((c) => c.status).join()}|${paidDebtors}|${group.status}`;
 
   return (
     <main className="phone">
       <div className="screen-head room-head">
         <div>
-          <h1 className="title">{group.name}</h1>
+          <h1 className="title">
+            {group.name}
+            {simulated && <SimTag />}
+          </h1>
           <span className="subtitle">
             {formatMoney(group.total_cents, group.currency)} · {t("paid by", "pagó")} {payer?.name ?? "—"}
           </span>
@@ -299,7 +344,6 @@ export default function GroupRoom() {
           </p>
         )}
 
-        {group.status === "settled" && <SettledBanner />}
 
         {group.status === "open" && isAdmin && <InviteCard groupId={group.id} count={members.length} />}
 
@@ -318,7 +362,18 @@ export default function GroupRoom() {
           <OwnShareInput me={me} busy={busy === "own-share"} onSave={(cents) => act("own-share", { cents })} />
         )}
 
-        {group.status === "collecting" && <ConfirmProgress done={paidDebtors} total={debtors.length} />}
+        {group.status !== "open" && (
+          <TableBoard
+            totalOwed={owedTotal}
+            collected={collected}
+            missing={debtors.length - paidDebtors}
+            settled={group.status === "settled"}
+          />
+        )}
+
+        {group.status !== "open" && owesSomething && (group.status === "collecting" || me.paid) && (
+          <PayPanel me={me} charges={myCharges} busy={busy} act={act} onRefresh={refresh} />
+        )}
 
         <MemberList
           group={group}
@@ -338,6 +393,14 @@ export default function GroupRoom() {
         />
 
         <SeatSheet seat={seat} onClose={() => setSeat(null)} />
+
+        {isAdmin && group.status !== "open" && <PaymentEvents load={loadEvents} version={version} />}
+
+        {group.status !== "open" && (
+          <a className="link-button board-link" href={`/g/${group.id}?mesa`} target="_blank" rel="noreferrer">
+            {t("Open the table screen (for a TV or laptop) ↗", "Abrir la pantalla de la mesa (para una tele o laptop) ↗")}
+          </a>
+        )}
 
         {group.status === "open" && !isAdmin && (
           <p className="room-note">
@@ -397,6 +460,67 @@ export default function GroupRoom() {
 
 // ── pieces ──────────────────────────────────────────────────────────────────
 
+/**
+ * The table on a big screen: how much is in, who paid, who is missing.
+ * Read-only and seatless, so it can stay open on a TV at the restaurant.
+ */
+function BoardView({ group, members, simulated }: { group: Group; members: Member[]; simulated: boolean }) {
+  const { t } = useLocale();
+  const reduce = useReducedMotion();
+  const payer = members.find((m) => m.id === group.payer_id);
+  const debtors = members.filter((m) => m.id !== group.payer_id && (m.share_cents ?? 0) > 0);
+  const paid = debtors.filter((m) => m.paid);
+  return (
+    <main className="board-screen">
+      <header className="board-screen-head">
+        <LogoMark size={44} badge />
+        <div>
+          <h1>
+            {group.name}
+            {simulated && <SimTag />}
+          </h1>
+          <span>
+            {formatMoney(group.total_cents)} · {t("paid by", "pagó")} {payer?.name ?? "—"}
+          </span>
+        </div>
+      </header>
+      {group.status === "open" ? (
+        <p className="board-wait">{t("Deciding the split…", "Decidiendo el reparto…")}</p>
+      ) : (
+        <TableBoard
+          big
+          totalOwed={debtors.reduce((a, m) => a + (m.share_cents ?? 0), 0)}
+          collected={paid.reduce((a, m) => a + (m.share_cents ?? 0), 0)}
+          missing={debtors.length - paid.length}
+          settled={group.status === "settled"}
+        />
+      )}
+      <ul className="board-people">
+        <AnimatePresence initial={false}>
+          {debtors.map((m) => (
+            <motion.li
+              key={m.id}
+              layout={reduce ? false : "position"}
+              className={m.paid ? "paid" : ""}
+              transition={SPRING}
+            >
+              <span className="avatar" aria-hidden="true">
+                {m.name.slice(0, 1).toUpperCase()}
+              </span>
+              <span className="grow">{m.name}</span>
+              <span className="money">{formatCents(m.share_cents ?? 0)}</span>
+              <span className="board-state">{m.paid ? t("Paid", "Pagó") : t("Missing", "Falta")}</span>
+            </motion.li>
+          ))}
+        </AnimatePresence>
+      </ul>
+      <p className="board-foot">
+        {t("Only the server marks a payment — when the bank confirms it through pey.", "Solo el servidor marca un pago — cuando el banco lo confirma a través de pey.")}
+      </p>
+    </main>
+  );
+}
+
 /** A spinner inside a button, so a slow call never looks like a dead tap. */
 function Busy({ children }: { children: React.ReactNode }) {
   return (
@@ -407,23 +531,6 @@ function Busy({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** The moment it all went through. A check that draws itself, once. */
-function SettledBanner() {
-  const { t } = useLocale();
-  return (
-    <section className="settled-banner" role="status">
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        {/* CSS, not JS: the finished check is the resting state, so a
-            throttled frame loop can never leave it half drawn. */}
-        <path className="draw-check" d="M4 12.5l5 5L20 6.5" />
-      </svg>
-      <div>
-        <strong>{t("Bill settled. Everyone paid their part.", "Cuenta saldada. Todos pagaron su parte.")}</strong>
-        <span>{t("Every payment was confirmed by the server.", "Cada pago lo confirmó el servidor.")}</span>
-      </div>
-    </section>
-  );
-}
 
 function StatusChip({ status }: { status: Group["status"] }) {
   const { t } = useLocale();
@@ -725,39 +832,6 @@ function OwnShareInput({
   );
 }
 
-function ConfirmProgress({ done, total }: { done: number; total: number }) {
-  const { t } = useLocale();
-  const reduce = useReducedMotion();
-  return (
-    <section className="confirm-progress" aria-live="polite">
-      <div className="confirm-count">
-        <span className="headline-count" style={{ fontSize: 38 }}>
-          {done}
-        </span>
-        <span>
-          {t(`of ${total} paid`, `de ${total} pagaron`)}
-        </span>
-      </div>
-      <div className="confirm-bar" aria-hidden="true">
-        {Array.from({ length: total }).map((_, i) => (
-          <span key={i}>
-            <motion.i
-              initial={false}
-              animate={{ scaleX: i < done ? 1 : 0 }}
-              transition={reduce ? { duration: 0 } : { type: "spring", stiffness: 260, damping: 26 }}
-            />
-          </span>
-        ))}
-      </div>
-      <p className="room-note">
-        {t(
-          "Each person pays their own share with CoDi. A name turns green only when the server receives the bank's confirmation.",
-          "Cada quien paga su parte con CoDi. Un nombre se pone en verde solo cuando el servidor recibe la confirmación del banco.",
-        )}
-      </p>
-    </section>
-  );
-}
 
 function MemberList({
   group,
